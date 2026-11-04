@@ -9,18 +9,20 @@
 #import "util.glo";
 
 #public {
-    Git_File :: struct {
-        /// Path relative to the repository root; directories end with `/`.
-        path: str;
-        x: u8;
-        y: u8;
-    }
 
-    Git_Repo :: struct {
-        /// Canonical path of the work tree root.
-        root: str;
-        files: [..]Git_File;
-    }
+Git_File :: struct {
+    /// Path relative to the repository root; directories end with `/`.
+    path: str;
+    x: u8;
+    y: u8;
+}
+
+Git_Repo :: struct {
+    /// Canonical path of the work tree root.
+    root: str;
+    files: [..]Git_File;
+}
+
 }
 
 Git_File ::: instance Freeable {
@@ -40,86 +42,103 @@ repos: [..]Git_Repo;
 not_repos: [..]str;
 
 #public {
-    /// The repository containing `directory`, loaded once and cached.
-    git_repo_for :: (directory: str) -> ?*Git_Repo {
-        #push_allocator(heap_allocator());
-        absolute_dir := canonical(directory).unwrap_or("");
-        if absolute_dir.count == 0 return null;
-        defer absolute_dir.free();
-        for i: 0..repos.count {
-            r := &repos[i];
-            if absolute_dir == r.root || absolute_dir.starts_with(tprint("{}/", r.root)) return r;
-        }
-        for path: not_repos if path == absolute_dir return null;
 
-        top := run_command(
-            "git", "-C", absolute_dir, "rev-parse", "--show-toplevel",
-            .capture_and_return_output = true
-        );
-        if top == {
-            case .Err;
+/// The repository containing `directory`, loaded once and cached.
+git_repo_for :: (directory: str) -> ?*Git_Repo {
+    #push_allocator(heap_allocator());
+    absolute_dir := canonical(directory).unwrap_or("");
+    if absolute_dir.count == 0 return null;
+    defer absolute_dir.free();
+    for i: 0..repos.count {
+        r := &repos[i];
+        if absolute_dir == r.root || absolute_dir.starts_with(tprint("{}/", r.root)) return r;
+    }
+    for path: not_repos if path == absolute_dir return null;
+
+    top := run_command(
+        "git",
+        "-C",
+        absolute_dir,
+        "rev-parse",
+        "--show-toplevel",
+        .capture_and_return_output = true
+    );
+    if top == {
+        case .Err;
+            not_repos.push(absolute_dir.clone());
+            return null;
+        case .Ok(output);
+            defer output.free();
+            if !output.status.exited || output.status.code != 0 {
                 not_repos.push(absolute_dir.clone());
                 return null;
-            case .Ok(output);
-                defer output.free();
-                if !output.status.exited || output.status.code != 0 {
-                    not_repos.push(absolute_dir.clone());
-                    return null;
-                }
-                root := output.output_string.trim();
-                repo: Git_Repo;
-                repo.root = canonical(root).unwrap_or(root.clone());
-                load_status(&repo);
-                repos.push(repo);
-                return &repos[repos.count - 1];
-        }
-    }
-
-    /// Status letters for `path`, or (0, 0) outside of any repository.
-    /// A directory takes the most significant status of what is inside it.
-    git_status_of :: (repo: *Git_Repo, path: str, is_dir: bool) -> (u8, u8) {
-        absolute_path := canonical(path).unwrap_or("");
-        if absolute_path.count == 0 {
-            // A broken link cannot be canonicalized; place it by its parent.
-            parent := canonical(parent_path(path)).unwrap_or("");
-            if parent.count == 0 return 0, 0;
-            defer parent.free();
-            absolute_path = join_path(parent, base_name(path));
-        }
-        defer absolute_path.free();
-        if absolute_path.count < repo.root.count return 0, 0;
-        relative := "";
-        if absolute_path.count > repo.root.count {
-            relative = absolute_path[repo.root.count + 1..absolute_path.count];
-        }
-        x: u8 = #char "-";
-        y: u8 = #char "-";
-        dir_prefix := tprint("{}/", relative);
-        for file: repo.files {
-            matched := false;
-            if file.path == relative || (file.path.count > 0 && file.path[file.path.count - 1] == #char "/" &&
-                (relative.starts_with(file.path) || dir_prefix == file.path)) {
-                matched = true;
-            } else if is_dir && (relative.count == 0 || file.path.starts_with(dir_prefix)) {
-                // Ignored files inside do not make the directory ignored.
-                if file.y == #char "I" continue;
-                matched = true;
             }
-            if !matched continue;
-            x = stronger(x, file.x);
-            y = stronger(y, file.y);
-        }
-        return x, y;
+            root := output.output_string.trim();
+            repo: Git_Repo;
+            repo.root = canonical(root).unwrap_or(root.clone());
+            load_status(&repo);
+            repos.push(repo);
+            return &repos[repos.count - 1];
     }
+}
+
+/// Status letters for `path`, or (0, 0) outside of any repository.
+/// A directory takes the most significant status of what is inside it.
+git_status_of :: (repo: *Git_Repo, path: str, is_dir: bool) -> (u8, u8) {
+    absolute_path := canonical(path).unwrap_or("");
+    if absolute_path.count == 0 {
+        // A broken link cannot be canonicalized; place it by its parent.
+        parent := canonical(parent_path(path)).unwrap_or("");
+        if parent.count == 0 return 0, 0;
+        defer parent.free();
+        absolute_path = join_path(parent, base_name(path));
+    }
+    defer absolute_path.free();
+    if absolute_path.count < repo.root.count return 0, 0;
+    relative := "";
+    if absolute_path.count > repo.root.count {
+        relative = absolute_path[repo.root.count + 1..absolute_path.count];
+    }
+    x: u8 = #char "-";
+    y: u8 = #char "-";
+    dir_prefix := tprint("{}/", relative);
+    for file: repo.files {
+        matched := false;
+        if file.path == relative || (
+            file.path.count > 0 && file.path[file.path.count - 1] == #char "/" && (
+                relative.starts_with(file.path) || dir_prefix == file.path
+            )
+        ) {
+            matched = true;
+        } else if is_dir && (relative.count == 0 || file.path.starts_with(dir_prefix)) {
+            // Ignored files inside do not make the directory ignored.
+            if file.y == #char "I" continue;
+            matched = true;
+        }
+        if !matched continue;
+        x = stronger(x, file.x);
+        y = stronger(y, file.y);
+    }
+    return x, y;
+}
+
 }
 
 load_status :: (repo: *Git_Repo) {
     status := run_command(
-        "git", "-C", repo.root, "status", "--porcelain=v1", "-z", "--ignored",
+        "git",
+        "-C",
+        repo.root,
+        "status",
+        "--porcelain=v1",
+        "-z",
+        "--ignored",
         "--untracked-files=normal",
         .capture_and_return_output = true
     );
-    #pattern .Ok(output) := status else { return; };
+    #pattern.Ok(output) := status else {
+        return;
+    };
     defer output.free();
     text := output.output_string;
     i: ssize = 0;
@@ -144,29 +163,47 @@ load_status :: (repo: *Git_Repo) {
 /// Maps porcelain codes to eza's letters.
 letter :: (code: u8, staged: bool) -> u8 {
     if code == {
-        case #char " "; return #char "-";
-        case #char "M"; return #char "M";
-        case #char "T"; return #char "T";
-        case #char "A"; return #char "N";
-        case #char "D"; return #char "D";
-        case #char "R", #char "C"; return #char "R";
-        case #char "U"; return #char "U";
-        case #char "?"; return ifx staged #char "-" else #char "N";
-        case #char "!"; return ifx staged #char "-" else #char "I";
-        else; return #char "-";
+        case #char " ";
+            return #char "-";
+        case #char "M";
+            return #char "M";
+        case #char "T";
+            return #char "T";
+        case #char "A";
+            return #char "N";
+        case #char "D";
+            return #char "D";
+        case #char "R", #char "C";
+            return #char "R";
+        case #char "U";
+            return #char "U";
+        case #char "?";
+            return ifx staged #char "-" else #char "N";
+        case #char "!";
+            return ifx staged #char "-" else #char "I";
+        else;
+            return #char "-";
     }
 }
 
 rank :: (c: u8) -> s64 {
     if c == {
-        case #char "U"; return 8;
-        case #char "D"; return 7;
-        case #char "M"; return 6;
-        case #char "R"; return 5;
-        case #char "T"; return 4;
-        case #char "N"; return 3;
-        case #char "I"; return 1;
-        else; return 0;
+        case #char "U";
+            return 8;
+        case #char "D";
+            return 7;
+        case #char "M";
+            return 6;
+        case #char "R";
+            return 5;
+        case #char "T";
+            return 4;
+        case #char "N";
+            return 3;
+        case #char "I";
+            return 1;
+        else;
+            return 0;
     }
 }
 

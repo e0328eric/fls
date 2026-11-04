@@ -21,46 +21,48 @@
 #import "git.glo";
 
 #public {
-    /// Everything the renderers need to know about the output.
-    Render :: struct {
-        options: *Options;
-        color: bool;
-        icons: bool;
-        classify: bool;
-        hyperlink: bool;
-        tty: bool;
-        width: ssize = 80;
-        host: str;
-        status: s32;
-        /// Directories left out because they could not be read.
-        skipped: [..]str;
-    }
 
-    run_cli :: (options: *Options) -> s32 {
-        r: Render;
-        r.options = options;
-        caps := terminal_capabilities().unwrap_or(.{});
-        r.tty = caps.interactive;
-        r.color = decide(options.color, r.tty) && (options.color == .Always || !no_color_env());
-        r.icons = decide(options.icons, r.tty);
-        r.classify = decide(options.classify, r.tty);
-        r.hyperlink = decide(options.hyperlink, r.tty);
-        r.width = 80;
-        if options.width > 0 r.width = options.width;
-        else if r.tty && caps.columns > 0 r.width = caps.columns;
-        else if #pattern ?n = env_columns() r.width = n;
-        if !r.tty && options.layout == .Grid && !options.layout_forced && options.width <= 0 {
-            options.layout = .Oneline;
-        }
-        if options.git && options.layout != .Long options.git = false;
-        theme_init();
-        list_arguments(&r);
-        flush_output();
-        output.free();
-        for path: r.skipped path.free();
-        r.skipped.free();
-        return r.status;
+/// Everything the renderers need to know about the output.
+Render :: struct {
+    options: *Options;
+    color: bool;
+    icons: bool;
+    classify: bool;
+    hyperlink: bool;
+    tty: bool;
+    width: ssize = 80;
+    host: str;
+    status: s32;
+    /// Directories left out because they could not be read.
+    skipped: [..]str;
+}
+
+run_cli :: (options: *Options) -> s32 {
+    r: Render;
+    r.options = options;
+    caps := terminal_capabilities().unwrap_or(.{});
+    r.tty = caps.interactive;
+    r.color = decide(options.color, r.tty) && (options.color == .Always || !no_color_env());
+    r.icons = decide(options.icons, r.tty);
+    r.classify = decide(options.classify, r.tty);
+    r.hyperlink = decide(options.hyperlink, r.tty);
+    r.width = 80;
+    if options.width > 0 r.width = options.width;
+    else if r.tty && caps.columns > 0 r.width = caps.columns;
+    else if #pattern ?n = env_columns() r.width = n;
+    if !r.tty && options.layout == .Grid && !options.layout_forced && options.width <= 0 {
+        options.layout = .Oneline;
     }
+    if options.git && options.layout != .Long options.git = false;
+    theme_init();
+    list_arguments(&r);
+    flush_output();
+    output.free();
+    for path: r.skipped path.free();
+    r.skipped.free();
+    return r.status;
+}
+
 }
 
 env_columns :: () -> ?ssize {
@@ -80,9 +82,12 @@ no_color_env :: () -> bool {
 
 decide :: (when: When, tty: bool) -> bool {
     if when == {
-        case .Always; return true;
-        case .Never; return false;
-        case .Auto; return tty;
+        case .Always;
+            return true;
+        case .Never;
+            return false;
+        case .Auto;
+            return tty;
     }
 }
 
@@ -195,8 +200,8 @@ list_arguments :: (r: *Render) {
 list_directory :: (r: *Render, path: str, depth: s64, header: str) {
     options := r.options;
     loaded := load_directory(path, &options.filter);
-    #pattern .Ok(found) := loaded else {
-        if #pattern .Err(error) = loaded report_unreadable(r, path, error.os_code);
+    #pattern.Ok(found) := loaded else {
+        if #pattern.Err(error) = loaded report_unreadable(r, path, error.os_code);
         return;
     };
     entries := found;
@@ -226,7 +231,9 @@ apply_git :: (r: *Render, entries: []Entry) {
     for *e: entries {
         dir := parent_path(e.path);
         if e.is_dir && (e.name == "." || e.path == ".") dir = e.path;
-        #pattern ?repo := git_repo_for(dir) else { continue; };
+        #pattern ?repo := git_repo_for(dir) else {
+            continue;
+        };
         x, y := git_status_of(repo, e.path, e.is_dir);
         e.git_x = x;
         e.git_y = y;
@@ -239,7 +246,9 @@ apply_total_sizes :: (r: *Render, entries: []Entry) {
         if e.stat_ok && e.meta.kind == .Directory && e.name != ".." {
             // An unreadable directory keeps showing "-".
             if read_directory(e.path) == {
-                case .Ok(list); list.free(); e.total_size = directory_size(e.path, 0);
+                case .Ok(list);
+                    list.free();
+                    e.total_size = directory_size(e.path, 0);
                 case .Err;
             }
         }
@@ -249,13 +258,17 @@ apply_total_sizes :: (r: *Render, entries: []Entry) {
 /// Recursive apparent size of a directory, not following symbolic links.
 directory_size :: (path: str, depth: s64) -> s64 {
     if depth > 64 return 0;
-    #pattern .Ok(list) := read_directory(path) else { return 0; };
+    #pattern.Ok(list) := read_directory(path) else {
+        return 0;
+    };
     defer list.free();
     total: s64 = 0;
     for item: list.entries {
         child := join_path(path, item.name);
         defer child.free();
-        #pattern .Ok(m) := metadata(child) else { continue; };
+        #pattern.Ok(m) := metadata(child) else {
+            continue;
+        };
         if m.kind == .Directory total += directory_size(child, depth + 1);
         else total += m.size;
     }
@@ -274,7 +287,8 @@ render_listing :: (r: *Render, entries: []Entry) {
                 output.write_string(cell.text);
                 output.write_string("\n");
             }
-        case .Grid; render_grid(r, entries);
+        case .Grid;
+            render_grid(r, entries);
     }
     maybe_flush();
 }
@@ -303,7 +317,10 @@ write_name_text :: (r: *Render, b: *String_Builder, name: str, style: Terminal_S
     quoted := r.options.quotes && needs_quotes(name);
     quote := ifx name.contains("'") "\"" else "'";
     if r.color write_sgr(b, style);
-    if quoted { b.write_string(quote); width += 1; }
+    if quoted {
+        b.write_string(quote);
+        width += 1;
+    }
     start: ssize = 0;
     for i: 0..name.count {
         c := name[i];
@@ -311,21 +328,35 @@ write_name_text :: (r: *Render, b: *String_Builder, name: str, style: Terminal_S
         b.write_string(name[start..i]);
         width += text_width(name[start..i]);
         escaped := ifx c == {
-            case 10; "\\n";
-            case 9; "\\t";
-            case 13; "\\r";
-            case 27; "\\e";
-            else; tprint("\\x{}", hex2(c));
+            case 10;
+                "\\n";
+            case 9;
+                "\\t";
+            case 13;
+                "\\r";
+            case 27;
+                "\\e";
+            else;
+                tprint("\\x{}", hex2(c));
         };
-        if r.color { b.write_string("\x1b[0m"); write_sgr(b, theme.control_char); }
+        if r.color {
+            b.write_string("\x1b[0m");
+            write_sgr(b, theme.control_char);
+        }
         b.write_string(escaped);
-        if r.color { b.write_string("\x1b[0m"); write_sgr(b, style); }
+        if r.color {
+            b.write_string("\x1b[0m");
+            write_sgr(b, style);
+        }
         width += escaped.count;
         start = i + 1;
     }
     b.write_string(name[start..name.count]);
     width += text_width(name[start..name.count]);
-    if quoted { b.write_string(quote); width += 1; }
+    if quoted {
+        b.write_string(quote);
+        width += 1;
+    }
     if r.color && !style_is_plain(style) b.write_string("\x1b[0m");
     return width;
 }
@@ -397,7 +428,12 @@ name_cell :: (r: *Render, e: *const Entry, link_target: bool) -> Cell {
     if link_target && e.stat_ok && e.meta.kind == .Symlink && !e.dereferenced {
         b.write_string(" ");
         // eza draws a broken link's arrow in LS_COLORS `or`.
-        write_styled(&b, "->", ifx e.target_ok theme.link_arrow else class_style(.Broken_Link), r.color);
+        write_styled(
+            &b,
+            "->",
+            ifx e.target_ok theme.link_arrow else class_style(.Broken_Link),
+            r.color
+        );
         b.write_string(" ");
         width += 4;
         width += write_link_target(r, &b, e);
@@ -412,9 +448,12 @@ name_cell :: (r: *Render, e: *const Entry, link_target: bool) -> Cell {
 
 kind_suffix :: (m: Metadata) -> str {
     if m.kind == {
-        case .Directory; return "/";
-        case .Fifo; return "|";
-        case .Socket; return "=";
+        case .Directory;
+            return "/";
+        case .Fifo;
+            return "|";
+        case .Socket;
+            return "=";
         else;
     }
     if is_executable(m) return "*";
@@ -437,14 +476,19 @@ write_link_target :: (r: *Render, b: *String_Builder, e: *const Entry) -> ssize 
     leaf := target[cut..target.count];
     style := class_style(.Normal);
     if e.target_meta.kind == {
-        case .Directory; style = class_style(.Directory);
+        case .Directory;
+            style = class_style(.Directory);
         case .Regular;
             if is_executable(e.target_meta) style = class_style(.Executable);
             else style = pattern_style(leaf).unwrap_or(class_style(classify_name(leaf)));
-        case .Fifo; style = class_style(.Pipe);
-        case .Socket; style = class_style(.Socket);
-        case .Block_Device; style = class_style(.Block_Device);
-        case .Character_Device; style = class_style(.Char_Device);
+        case .Fifo;
+            style = class_style(.Pipe);
+        case .Socket;
+            style = class_style(.Socket);
+        case .Block_Device;
+            style = class_style(.Block_Device);
+        case .Character_Device;
+            style = class_style(.Char_Device);
         else;
     }
     saved := r.options.quotes;
@@ -561,20 +605,34 @@ Column :: enum {
 
 column_title :: (c: Column) -> str {
     if c == {
-        case .Inode; return "inode";
-        case .Octal; return "Octal";
-        case .Permissions; return "Permissions";
-        case .Links; return "Links";
-        case .Size; return "Size";
-        case .Blocks; return "Blocksize";
-        case .User; return "User";
-        case .Group; return "Group";
-        case .Modified; return "Date Modified";
-        case .Changed; return "Date Changed";
-        case .Created; return "Date Created";
-        case .Accessed; return "Date Accessed";
-        case .Git; return "Git";
-        case .Name; return "Name";
+        case .Inode;
+            return "inode";
+        case .Octal;
+            return "Octal";
+        case .Permissions;
+            return "Permissions";
+        case .Links;
+            return "Links";
+        case .Size;
+            return "Size";
+        case .Blocks;
+            return "Blocksize";
+        case .User;
+            return "User";
+        case .Group;
+            return "Group";
+        case .Modified;
+            return "Date Modified";
+        case .Changed;
+            return "Date Changed";
+        case .Created;
+            return "Date Created";
+        case .Accessed;
+            return "Date Accessed";
+        case .Git;
+            return "Git";
+        case .Name;
+            return "Name";
     }
 }
 
@@ -637,7 +695,9 @@ render_long :: (r: *Render, entries: []Entry, prefixes: []str) {
                 prefix_cell: Cell;
                 if prefixes.count > index prefix_cell = tree_prefix_cell(r, prefixes[index]);
                 cell := name_cell(r, e, true);
-                row.push(.{ tprint("{}{}", prefix_cell.text, cell.text), prefix_cell.width + cell.width });
+                row.push(
+                    .{ tprint("{}{}", prefix_cell.text, cell.text), prefix_cell.width + cell.width }
+                );
             } else {
                 row.push(column_cell(r, e, c));
             }
@@ -680,13 +740,17 @@ column_cell :: (r: *Render, e: *const Entry, c: Column) -> Cell {
     if e.is_error return .{ "", 0 };
     if !e.stat_ok return styled_cell(r, "?", theme.punctuation);
     if c == {
-        case .Inode; return styled_cell(r, tprint("{}", m.file_id.low), theme.inode);
-        case .Octal; return styled_cell(r, octal_text(cast(u32) m.permissions & 8#7777), theme.octal);
-        case .Permissions; return permissions_cell(r, e);
+        case .Inode;
+            return styled_cell(r, tprint("{}", m.file_id.low), theme.inode);
+        case .Octal;
+            return styled_cell(r, octal_text(cast(u32) m.permissions & 8#7777), theme.octal);
+        case .Permissions;
+            return permissions_cell(r, e);
         case .Links;
             style := ifx m.kind != .Directory && m.link_count > 1 theme.links_multi else theme.links;
             return styled_cell(r, tprint("{}", m.link_count), style);
-        case .Size; return size_cell(r, e);
+        case .Size;
+            return size_cell(r, e);
         case .Blocks;
             kind := ifx e.dereferenced e.target_meta.kind else m.kind;
             if kind != .Regular return styled_cell(r, "-", theme.punctuation);
@@ -701,12 +765,18 @@ column_cell :: (r: *Render, e: *const Entry, c: Column) -> Cell {
             name := ifx r.options.numeric tprint("{}", m.group) else group_name(m.group);
             style := ifx in_group(m.group) theme.group_self else theme.group_other;
             return styled_cell(r, name, style);
-        case .Modified; return time_cell(r, m.modified);
-        case .Changed; return time_cell(r, m.changed);
-        case .Created; return time_cell(r, m.created);
-        case .Accessed; return time_cell(r, m.accessed);
-        case .Git; return git_cell(r, e);
-        case .Name; return name_cell(r, e, true);
+        case .Modified;
+            return time_cell(r, m.modified);
+        case .Changed;
+            return time_cell(r, m.changed);
+        case .Created;
+            return time_cell(r, m.created);
+        case .Accessed;
+            return time_cell(r, m.accessed);
+        case .Git;
+            return git_cell(r, e);
+        case .Name;
+            return name_cell(r, e, true);
     }
 }
 
@@ -726,13 +796,20 @@ git_cell :: (r: *Render, e: *const Entry) -> Cell {
     for code: .[e.git_x, e.git_y] {
         style := theme.punctuation;
         if code == {
-            case #char "N"; style = theme.git_new;
-            case #char "M"; style = theme.git_modified;
-            case #char "D"; style = theme.git_deleted;
-            case #char "R"; style = theme.git_renamed;
-            case #char "T"; style = theme.git_typechange;
-            case #char "I"; style = theme.git_ignored;
-            case #char "U"; style = theme.git_conflicted;
+            case #char "N";
+                style = theme.git_new;
+            case #char "M";
+                style = theme.git_modified;
+            case #char "D";
+                style = theme.git_deleted;
+            case #char "R";
+                style = theme.git_renamed;
+            case #char "T";
+                style = theme.git_typechange;
+            case #char "I";
+                style = theme.git_ignored;
+            case #char "U";
+                style = theme.git_conflicted;
             else;
         }
         write_styled(&b, tprint("{c}", code), style, r.color);
@@ -780,12 +857,24 @@ permissions_cell :: (r: *Render, e: *const Entry) -> Cell {
     type_char := ".";
     type_class := File_Class.Normal;
     if m.kind == {
-        case .Directory; type_char = "d"; type_class = .Directory;
-        case .Symlink; type_char = "l"; type_class = .Symlink;
-        case .Fifo; type_char = "|"; type_class = .Pipe;
-        case .Socket; type_char = "s"; type_class = .Socket;
-        case .Block_Device; type_char = "b"; type_class = .Block_Device;
-        case .Character_Device; type_char = "c"; type_class = .Char_Device;
+        case .Directory;
+            type_char = "d";
+            type_class = .Directory;
+        case .Symlink;
+            type_char = "l";
+            type_class = .Symlink;
+        case .Fifo;
+            type_char = "|";
+            type_class = .Pipe;
+        case .Socket;
+            type_char = "s";
+            type_class = .Socket;
+        case .Block_Device;
+            type_char = "b";
+            type_class = .Block_Device;
+        case .Character_Device;
+            type_char = "c";
+            type_class = .Char_Device;
         else;
     }
     write_styled(&b, type_char, class_style(type_class), r.color);
@@ -798,14 +887,37 @@ permissions_cell :: (r: *Render, e: *const Entry) -> Cell {
     bit(r, &b, (p & 8#200) != 0, "w", theme.perm_user_write);
     // eza uses `su` only for the `s` of an executable setuid regular file.
     user_special := ifx is_file && (p & 8#100) != 0 theme.perm_special_user_file else theme.perm_special_other;
-    exec_bit(r, &b, (p & 8#100) != 0, (p & 8#4000) != 0, "s",
-        ifx is_file theme.perm_user_exec_file else theme.perm_user_exec, user_special);
+    exec_bit(
+        r,
+        &b,
+        (p & 8#100) != 0,
+        (p & 8#4000) != 0,
+        "s",
+        ifx is_file theme.perm_user_exec_file else theme.perm_user_exec,
+        user_special
+    );
     bit(r, &b, (p & 8#040) != 0, "r", theme.perm_group_read);
     bit(r, &b, (p & 8#020) != 0, "w", theme.perm_group_write);
-    exec_bit(r, &b, (p & 8#010) != 0, (p & 8#2000) != 0, "s", theme.perm_group_exec, theme.perm_special_other);
+    exec_bit(
+        r,
+        &b,
+        (p & 8#010) != 0,
+        (p & 8#2000) != 0,
+        "s",
+        theme.perm_group_exec,
+        theme.perm_special_other
+    );
     bit(r, &b, (p & 8#004) != 0, "r", theme.perm_other_read);
     bit(r, &b, (p & 8#002) != 0, "w", theme.perm_other_write);
-    exec_bit(r, &b, (p & 8#001) != 0, (p & 8#1000) != 0, "t", theme.perm_other_exec, theme.perm_special_other);
+    exec_bit(
+        r,
+        &b,
+        (p & 8#001) != 0,
+        (p & 8#1000) != 0,
+        "t",
+        theme.perm_other_exec,
+        theme.perm_special_other
+    );
     return .{ b.to_string(), 10 };
 }
 
@@ -865,12 +977,19 @@ render_tree :: (r: *Render, root: *Entry) {
     reset_temporary_storage();
 }
 
-collect_tree :: (r: *Render, path: str, prefix: str, depth: s64, out: *[..]Entry, prefixes: *[..]str) {
+collect_tree :: (
+    r: *Render,
+    path: str,
+    prefix: str,
+    depth: s64,
+    out: *[..]Entry,
+    prefixes: *[..]str
+) {
     if r.options.level >= 0 && depth > r.options.level return;
     loaded := load_directory(path, &r.options.filter);
-    #pattern .Ok(found) := loaded else {
+    #pattern.Ok(found) := loaded else {
         // eza shows the failure as the directory's only child.
-        if #pattern .Err(error) = loaded {
+        if #pattern.Err(error) = loaded {
             failure: Entry;
             failure.name = tprint("<{} (os error {})>", os_error_text(error.os_code), error.os_code).clone();
             failure.path = path.clone();
@@ -893,7 +1012,14 @@ collect_tree :: (r: *Render, path: str, prefix: str, depth: s64, out: *[..]Entry
         if recurse {
             all := out.*;
             child := all[all.count - 1].path;
-            collect_tree(r, child, tprint("{}{}", prefix, ifx last "    " else "│   "), depth + 1, out, prefixes);
+            collect_tree(
+                r,
+                child,
+                tprint("{}{}", prefix, ifx last "    " else "│   "),
+                depth + 1,
+                out,
+                prefixes
+            );
         }
     }
 }

@@ -13,69 +13,71 @@
 #import "theme.glo";
 
 #public {
-    Entry :: struct {
-        /// What is shown: the file name, or the path as typed for arguments.
-        name: str;
-        /// The path used to reach the file.
-        path: str;
-        meta: Metadata;
-        stat_ok: bool;
-        stat_error: Fs_Error_Kind;
-        stat_code: s64;
-        /// For a symbolic link: where it points, and what is there.
-        link_target: str;
-        target_meta: Metadata;
-        target_ok: bool;
-        class: File_Class;
-        /// A directory, or a link to one.
-        is_dir: bool;
-        /// Two-letter git status (staged, unstaged); 0 when unknown.
-        git_x: u8;
-        git_y: u8;
-        /// Recursive size for --total-size; -1 when not computed.
-        total_size: s64 = -1;
-        /// A placeholder row describing an error (tree view).
-        is_error: bool;
-        /// `-X`: a link whose metadata (but not type) is its target's.
-        dereferenced: bool;
-    }
 
-    Sort_Field :: enum {
-        Name;
-        Name_Case;
-        Extension;
-        Extension_Case;
-        Size;
-        Type;
-        Modified;
-        Accessed;
-        Created;
-        Changed;
-        Inode;
-        None;
-    }
+Entry :: struct {
+    /// What is shown: the file name, or the path as typed for arguments.
+    name: str;
+    /// The path used to reach the file.
+    path: str;
+    meta: Metadata;
+    stat_ok: bool;
+    stat_error: Fs_Error_Kind;
+    stat_code: s64;
+    /// For a symbolic link: where it points, and what is there.
+    link_target: str;
+    target_meta: Metadata;
+    target_ok: bool;
+    class: File_Class;
+    /// A directory, or a link to one.
+    is_dir: bool;
+    /// Two-letter git status (staged, unstaged); 0 when unknown.
+    git_x: u8;
+    git_y: u8;
+    /// Recursive size for --total-size; -1 when not computed.
+    total_size: s64 = -1;
+    /// A placeholder row describing an error (tree view).
+    is_error: bool;
+    /// `-X`: a link whose metadata (but not type) is its target's.
+    dereferenced: bool;
+}
 
-    Dir_Grouping :: enum {
-        None;
-        First;
-        Last;
-    }
+Sort_Field :: enum {
+    Name;
+    Name_Case;
+    Extension;
+    Extension_Case;
+    Size;
+    Type;
+    Modified;
+    Accessed;
+    Created;
+    Changed;
+    Inode;
+    None;
+}
 
-    Sort_Options :: struct {
-        field: Sort_Field = .Name;
-        reverse: bool;
-        grouping: Dir_Grouping = .None;
-    }
+Dir_Grouping :: enum {
+    None;
+    First;
+    Last;
+}
 
-    Filter_Options :: struct {
-        /// 0: hide dotfiles, 1: show them, 2: also show `.` and `..`.
-        all: s64;
-        only_dirs: bool;
-        only_files: bool;
-        ignore: [..]str;
-        /// Follow symbolic links when deciding what an entry is.
-        dereference: bool;
-    }
+Sort_Options :: struct {
+    field: Sort_Field = .Name;
+    reverse: bool;
+    grouping: Dir_Grouping = .None;
+}
+
+Filter_Options :: struct {
+    /// 0: hide dotfiles, 1: show them, 2: also show `.` and `..`.
+    all: s64;
+    only_dirs: bool;
+    only_files: bool;
+    ignore: [..]str;
+    /// Follow symbolic links when deciding what an entry is.
+    dereference: bool;
+}
+
 }
 
 Entry ::: instance Freeable {
@@ -87,224 +89,240 @@ Entry ::: instance Freeable {
 }
 
 #public {
-    /// Stats `path` and builds an entry shown as `name`. Both are copied.
-    entry_make :: (path: str, name: str, dereference: bool = false) -> Entry {
-        e: Entry;
-        e.name = name.clone();
-        e.path = path.clone();
-        entry_stat(&e, dereference);
-        return e;
-    }
 
-    /// (Re)reads the metadata of an entry from its path.
-    entry_stat :: (e: *Entry, dereference: bool = false) {
-        free_string(&e.link_target);
-        e.target_ok = false;
-        e.dereferenced = false;
-        e.stat_ok = false;
-        if metadata(e.path) == {
+/// Stats `path` and builds an entry shown as `name`. Both are copied.
+entry_make :: (path: str, name: str, dereference: bool = false) -> Entry {
+    e: Entry;
+    e.name = name.clone();
+    e.path = path.clone();
+    entry_stat(&e, dereference);
+    return e;
+}
+
+/// (Re)reads the metadata of an entry from its path.
+entry_stat :: (e: *Entry, dereference: bool = false) {
+    free_string(&e.link_target);
+    e.target_ok = false;
+    e.dereferenced = false;
+    e.stat_ok = false;
+    if metadata(e.path) == {
+        case .Ok(m);
+            e.meta = m;
+            e.stat_ok = true;
+        case .Err(error);
+            e.stat_error = error.kind;
+            e.stat_code = error.os_code;
+    }
+    if e.stat_ok && e.meta.kind == .Symlink {
+        if read_link(e.path) == {
+            case .Ok(target);
+                e.link_target = target.value.clone();
+                target.free();
+            else;
+        }
+        if metadata(e.path, true) == {
             case .Ok(m);
-                e.meta = m;
-                e.stat_ok = true;
-            case .Err(error);
-                e.stat_error = error.kind;
-                e.stat_code = error.os_code;
-        }
-        if e.stat_ok && e.meta.kind == .Symlink {
-            if read_link(e.path) == {
-                case .Ok(target);
-                    e.link_target = target.value.clone();
-                    target.free();
-                else;
-            }
-            if metadata(e.path, true) == {
-                case .Ok(m);
-                    e.target_meta = m;
-                    e.target_ok = true;
-                else;
-            }
-            if dereference && e.target_ok {
-                // eza keeps the link's type and look, with its target's details.
-                e.meta = e.target_meta;
-                e.meta.kind = .Symlink;
-                e.dereferenced = true;
-            }
-        }
-        e.dereferenced = e.dereferenced && e.stat_ok;
-        e.is_dir = e.stat_ok && (e.meta.kind == .Directory ||
-            (e.meta.kind == .Symlink && e.target_ok && e.target_meta.kind == .Directory));
-        e.class = entry_class(e);
-    }
-
-    entry_class :: (e: *const Entry) -> File_Class {
-        if !e.stat_ok return .Normal;
-        if e.meta.kind == {
-            case .Directory; return .Directory;
-            case .Symlink; return ifx e.target_ok File_Class.Symlink else File_Class.Broken_Link;
-            case .Fifo; return .Pipe;
-            case .Socket; return .Socket;
-            case .Block_Device; return .Block_Device;
-            case .Character_Device; return .Char_Device;
+                e.target_meta = m;
+                e.target_ok = true;
             else;
         }
-        if is_executable(e.meta) return .Executable;
-        class := classify_name(e.name);
-        ext := extension_of(e.name);
-        sources := compiled_sources(ext);
-        if sources.count > 0 {
-            stem_end := e.path.count - ext.count;
-            for source: sources {
-                sibling := tprint("{}{}", e.path[0..stem_end], source);
-                if exists(sibling).unwrap_or(false) return .Compiled;
-            }
+        if dereference && e.target_ok {
+            // eza keeps the link's type and look, with its target's details.
+            e.meta = e.target_meta;
+            e.meta.kind = .Symlink;
+            e.dereferenced = true;
         }
-        return class;
     }
+    e.dereferenced = e.dereferenced && e.stat_ok;
+    e.is_dir = e.stat_ok && (
+        e.meta.kind == .Directory || (
+            e.meta.kind == .Symlink && e.target_ok && e.target_meta.kind == .Directory
+        )
+    );
+    e.class = entry_class(e);
+}
 
-    is_executable :: (m: Metadata) -> bool {
-        exec := File_Permissions.Owner_Execute | .Group_Execute | .Other_Execute;
-        return m.kind == .Regular && (m.permissions & exec) != File_Permissions.None;
+entry_class :: (e: *const Entry) -> File_Class {
+    if !e.stat_ok return .Normal;
+    if e.meta.kind == {
+        case .Directory;
+            return .Directory;
+        case .Symlink;
+            return ifx e.target_ok File_Class.Symlink else File_Class.Broken_Link;
+        case .Fifo;
+            return .Pipe;
+        case .Socket;
+            return .Socket;
+        case .Block_Device;
+            return .Block_Device;
+        case .Character_Device;
+            return .Char_Device;
+        else;
     }
-
-    /// The style a name is drawn in: LS_COLORS patterns first for ordinary
-    /// files, then the class color.
-    entry_style :: (e: *const Entry) -> Terminal_Style {
-        if e.class != .Directory && e.class != .Symlink && e.class != .Broken_Link &&
-            e.class != .Executable && e.class != .Pipe && e.class != .Socket &&
-            e.class != .Block_Device && e.class != .Char_Device {
-            if #pattern ?style = pattern_style(e.name) return style;
+    if is_executable(e.meta) return .Executable;
+    class := classify_name(e.name);
+    ext := extension_of(e.name);
+    sources := compiled_sources(ext);
+    if sources.count > 0 {
+        stem_end := e.path.count - ext.count;
+        for source: sources {
+            sibling := tprint("{}{}", e.path[0..stem_end], source);
+            if exists(sibling).unwrap_or(false) return .Compiled;
         }
-        return class_style(e.class);
     }
+    return class;
+}
 
-    /// The single-character type indicator that `-F` appends.
-    classify_suffix :: (e: *const Entry) -> str {
-        if !e.stat_ok return "";
-        if e.meta.kind == {
-            case .Directory; return "/";
-            case .Symlink; return "@";
-            case .Fifo; return "|";
-            case .Socket; return "=";
-            else;
-        }
-        if is_executable(e.meta) return "*";
-        return "";
+is_executable :: (m: Metadata) -> bool {
+    exec := File_Permissions.Owner_Execute | .Group_Execute | .Other_Execute;
+    return m.kind == .Regular && (m.permissions & exec) != File_Permissions.None;
+}
+
+/// The style a name is drawn in: LS_COLORS patterns first for ordinary
+/// files, then the class color.
+entry_style :: (e: *const Entry) -> Terminal_Style {
+    if e.class != .Directory && e.class != .Symlink && e.class != .Broken_Link &&
+        e.class != .Executable && e.class != .Pipe && e.class != .Socket &&
+        e.class != .Block_Device && e.class != .Char_Device {
+        if #pattern ?style = pattern_style(e.name) return style;
     }
+    return class_style(e.class);
+}
 
-    entry_icon :: (e: *const Entry) -> str {
-        // A link to a directory gets the (non-empty) directory icon, as in eza.
-        dir := e.is_dir;
-        empty := dir && e.meta.kind == .Directory && is_empty(e.path).unwrap_or(false);
-        return icon_for(e.name, e.class, dir, empty);
+/// The single-character type indicator that `-F` appends.
+classify_suffix :: (e: *const Entry) -> str {
+    if !e.stat_ok return "";
+    if e.meta.kind == {
+        case .Directory;
+            return "/";
+        case .Symlink;
+            return "@";
+        case .Fifo;
+            return "|";
+        case .Socket;
+            return "=";
+        else;
     }
+    if is_executable(e.meta) return "*";
+    return "";
+}
 
-    is_hidden_name :: (name: str) -> bool {
-        return name.count > 0 && name[0] == #char ".";
+entry_icon :: (e: *const Entry) -> str {
+    // A link to a directory gets the (non-empty) directory icon, as in eza.
+    dir := e.is_dir;
+    empty := dir && e.meta.kind == .Directory && is_empty(e.path).unwrap_or(false);
+    return icon_for(e.name, e.class, dir, empty);
+}
+
+is_hidden_name :: (name: str) -> bool {
+    return name.count > 0 && name[0] == #char ".";
+}
+
+/// Whether a directory listing keeps the entry called `name`.
+keep_name :: (name: str, filter: *const Filter_Options) -> bool {
+    if filter.all == 0 && is_hidden_name(name) return false;
+    for pattern: filter.ignore {
+        if glob_match(pattern, name) return false;
     }
+    return true;
+}
 
-    /// Whether a directory listing keeps the entry called `name`.
-    keep_name :: (name: str, filter: *const Filter_Options) -> bool {
-        if filter.all == 0 && is_hidden_name(name) return false;
-        for pattern: filter.ignore {
-            if glob_match(pattern, name) return false;
-        }
-        return true;
-    }
+/// Applies the type filters (-D, -f) to a loaded entry.
+keep_entry :: (e: *const Entry, filter: *const Filter_Options) -> bool {
+    // As in eza, a link to a directory is not a directory here.
+    dir := e.stat_ok && e.meta.kind == .Directory;
+    if filter.only_dirs && !dir return false;
+    if filter.only_files && dir return false;
+    return true;
+}
 
-    /// Applies the type filters (-D, -f) to a loaded entry.
-    keep_entry :: (e: *const Entry, filter: *const Filter_Options) -> bool {
-        // As in eza, a link to a directory is not a directory here.
-        dir := e.stat_ok && e.meta.kind == .Directory;
-        if filter.only_dirs && !dir return false;
-        if filter.only_files && dir return false;
-        return true;
-    }
-
-    /// Reads and stats the entries of the directory at `path`.
-    /// The caller frees every entry and the array.
-    load_directory :: (path: str, filter: *const Filter_Options) -> Fs_Error![..]Entry {
-        out: [..]Entry;
-        list := read_directory(path)?;
-        defer list.free();
-        if filter.all >= 2 {
-            for dot: .[".", ".."] {
-                child := join_path(path, dot);
-                defer child.free();
-                e := entry_make(child, dot, filter.dereference);
-                out.push(e);
-            }
-        }
-        for item: list.entries {
-            if !keep_name(item.name, filter) continue;
-            child := join_path(path, item.name);
+/// Reads and stats the entries of the directory at `path`.
+/// The caller frees every entry and the array.
+load_directory :: (path: str, filter: *const Filter_Options) -> Fs_Error![..]Entry {
+    out: [..]Entry;
+    list := read_directory(path)?;
+    defer list.free();
+    if filter.all >= 2 {
+        for dot: .[".", ".."] {
+            child := join_path(path, dot);
             defer child.free();
-            e := entry_make(child, item.name, filter.dereference);
-            if !keep_entry(&e, filter) {
-                e.free();
-                continue;
-            }
+            e := entry_make(child, dot, filter.dereference);
             out.push(e);
         }
-        return out;
     }
-
-    /// Releases the entries and the array (a dynamic array of owners is
-    /// released structurally, element by element).
-    free_entries :: (entries: *[..]Entry) {
-        free(entries);
-    }
-
-    /// Sorts as eza does: a stable sort on the field, inverted by `reverse`
-    /// (ties keep directory order either way), then directories are grouped
-    /// first or last without disturbing the order within each group.
-    sort_entries :: (entries: []Entry, options: Sort_Options) {
-        if options.field != .None {
-            _ := entries.sort_by_context(options, compare_sorted);
-        } else if options.reverse {
-            reverse_entries(entries);
+    for item: list.entries {
+        if !keep_name(item.name, filter) continue;
+        child := join_path(path, item.name);
+        defer child.free();
+        e := entry_make(child, item.name, filter.dereference);
+        if !keep_entry(&e, filter) {
+            e.free();
+            continue;
         }
-        if options.grouping != .None {
-            _ := entries.sort_by_context(options.grouping, compare_grouping);
-        }
+        out.push(e);
     }
+    return out;
+}
 
-    compare_sorted :: (options: Sort_Options, a: Entry, b: Entry) -> Ordering {
-        order := compare_field(options.field, a, b);
-        if !options.reverse return order;
-        if order == .Less return .Greater;
-        if order == .Greater return .Less;
-        return order;
+/// Releases the entries and the array (a dynamic array of owners is
+/// released structurally, element by element).
+free_entries :: (entries: *[..]Entry) {
+    free(entries);
+}
+
+/// Sorts as eza does: a stable sort on the field, inverted by `reverse`
+/// (ties keep directory order either way), then directories are grouped
+/// first or last without disturbing the order within each group.
+sort_entries :: (entries: []Entry, options: Sort_Options) {
+    if options.field != .None {
+        _ := entries.sort_by_context(options, compare_sorted);
+    } else if options.reverse {
+        reverse_entries(entries);
     }
-
-    compare_grouping :: (grouping: Dir_Grouping, a: Entry, b: Entry) -> Ordering {
-        if a.is_dir == b.is_dir return .Equal;
-        first := ifx grouping == .First a.is_dir else b.is_dir;
-        return ifx first Ordering.Less else Ordering.Greater;
+    if options.grouping != .None {
+        _ := entries.sort_by_context(options.grouping, compare_grouping);
     }
+}
 
-    reverse_entries :: (entries: []Entry) {
-        i: ssize = 0;
-        j := entries.count - 1;
-        while i < j {
-            tmp := entries[i];
-            entries[i] = entries[j];
-            entries[j] = tmp;
-            i += 1;
-            j -= 1;
-        }
+compare_sorted :: (options: Sort_Options, a: Entry, b: Entry) -> Ordering {
+    order := compare_field(options.field, a, b);
+    if !options.reverse return order;
+    if order == .Less return .Greater;
+    if order == .Greater return .Less;
+    return order;
+}
+
+compare_grouping :: (grouping: Dir_Grouping, a: Entry, b: Entry) -> Ordering {
+    if a.is_dir == b.is_dir return .Equal;
+    first := ifx grouping == .First a.is_dir else b.is_dir;
+    return ifx first Ordering.Less else Ordering.Greater;
+}
+
+reverse_entries :: (entries: []Entry) {
+    i: ssize = 0;
+    j := entries.count - 1;
+    while i < j {
+        tmp := entries[i];
+        entries[i] = entries[j];
+        entries[j] = tmp;
+        i += 1;
+        j -= 1;
     }
+}
 
+entry_size :: (e: *const Entry) -> s64 {
+    if e.total_size >= 0 return e.total_size;
+    return e.meta.size;
+}
 
-    entry_size :: (e: *const Entry) -> s64 {
-        if e.total_size >= 0 return e.total_size;
-        return e.meta.size;
-    }
 }
 
 #public compare_field :: (field: Sort_Field, a: Entry, b: Entry) -> Ordering {
     if field == {
-        case .Name; return natural_compare(a.name, b.name, true);
-        case .Name_Case; return natural_compare(a.name, b.name, false);
+        case .Name;
+            return natural_compare(a.name, b.name, true);
+        case .Name_Case;
+            return natural_compare(a.name, b.name, false);
         case .Extension, .Extension_Case;
             // Directories have no extension.
             ea := ifx a.is_dir "" else extension_of(a.name);
@@ -315,18 +333,25 @@ Entry ::: instance Freeable {
                 return ea <=> eb;
             }
             return natural_compare(a.name, b.name, field == .Extension);
-        case .Size; return entry_size(&a) <=> entry_size(&b);
+        case .Size;
+            return entry_size(&a) <=> entry_size(&b);
         case .Type;
             ka := type_rank(a);
             kb := type_rank(b);
             if ka != kb return ka <=> kb;
             return natural_compare(a.name, b.name, false);
-        case .Modified; return time_order(a.meta.modified, b.meta.modified);
-        case .Accessed; return time_order(a.meta.accessed, b.meta.accessed);
-        case .Created; return time_order(a.meta.created, b.meta.created);
-        case .Changed; return time_order(a.meta.changed, b.meta.changed);
-        case .Inode; return a.meta.file_id.low <=> b.meta.file_id.low;
-        case .None; return .Equal;
+        case .Modified;
+            return time_order(a.meta.modified, b.meta.modified);
+        case .Accessed;
+            return time_order(a.meta.accessed, b.meta.accessed);
+        case .Created;
+            return time_order(a.meta.created, b.meta.created);
+        case .Changed;
+            return time_order(a.meta.changed, b.meta.changed);
+        case .Inode;
+            return a.meta.file_id.low <=> b.meta.file_id.low;
+        case .None;
+            return .Equal;
     }
 }
 
@@ -340,13 +365,21 @@ time_order :: (a: File_Timestamp, b: File_Timestamp) -> Ordering {
 type_rank :: (e: Entry) -> s64 {
     if !e.stat_ok return 1;
     if e.meta.kind == {
-        case .Directory; return 0;
-        case .Regular; return 1;
-        case .Symlink; return 2;
-        case .Fifo; return 3;
-        case .Socket; return 4;
-        case .Character_Device; return 5;
-        case .Block_Device; return 6;
-        else; return 7;
+        case .Directory;
+            return 0;
+        case .Regular;
+            return 1;
+        case .Symlink;
+            return 2;
+        case .Fifo;
+            return 3;
+        case .Socket;
+            return 4;
+        case .Character_Device;
+            return 5;
+        case .Block_Device;
+            return 6;
+        else;
+            return 7;
     }
 }
