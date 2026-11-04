@@ -1,0 +1,733 @@
+//! fls/src/theme.glo - file classes, colors and icons.
+//!
+//! Colors are kept as `Terminal_Style` values so the TUI can draw them on a
+//! canvas, and `write_sgr` serializes the same styles for the CLI. The
+//! defaults follow eza's palette; `LS_COLORS` and `EZA_COLORS` override them.
+
+#import "Io";
+#import "Format";
+#import "Strings";
+#import "String_Builder";
+#import "Terminal";
+#import "Process/Environment";
+#import "util.glo";
+
+#public {
+    /// What kind of thing a name is, for coloring and icons.
+    File_Class :: enum {
+        Normal;
+        Directory;
+        Executable;
+        Symlink;
+        Broken_Link;
+        Pipe;
+        Socket;
+        Block_Device;
+        Char_Device;
+        Image;
+        Video;
+        Audio;
+        Lossless;
+        Crypto;
+        Document;
+        Archive;
+        Temp;
+        Compiled;
+        Build;
+        Source;
+        Config;
+    }
+
+    Theme :: struct {
+        class_styles: [21]Terminal_Style;
+        /// `*.ext` / glob overrides from LS_COLORS, checked before the defaults.
+        patterns: [..]Pattern_Style;
+
+        punctuation: Terminal_Style;
+        tree: Terminal_Style;
+        header: Terminal_Style;
+        link_arrow: Terminal_Style;
+        link_path: Terminal_Style;
+        control_char: Terminal_Style;
+
+        perm_user_read: Terminal_Style;
+        perm_user_write: Terminal_Style;
+        perm_user_exec_file: Terminal_Style;
+        perm_user_exec: Terminal_Style;
+        perm_group_read: Terminal_Style;
+        perm_group_write: Terminal_Style;
+        perm_group_exec: Terminal_Style;
+        perm_other_read: Terminal_Style;
+        perm_other_write: Terminal_Style;
+        perm_other_exec: Terminal_Style;
+        /// eza's `su`, for the setuid `s` of an executable regular file.
+        perm_special_user_file: Terminal_Style;
+        /// eza's `sf`, for every other setuid, setgid and sticky letter.
+        perm_special_other: Terminal_Style;
+        perm_attribute: Terminal_Style;
+
+        /// Sizes colored by magnitude: bytes, kilo, mega, giga, larger.
+        size_styles: [5]Terminal_Style;
+        size_major: Terminal_Style;
+        size_minor: Terminal_Style;
+        user_self: Terminal_Style;
+        user_other: Terminal_Style;
+        group_self: Terminal_Style;
+        group_other: Terminal_Style;
+        date: Terminal_Style;
+        inode: Terminal_Style;
+        links: Terminal_Style;
+        links_multi: Terminal_Style;
+        blocks: Terminal_Style;
+        octal: Terminal_Style;
+
+        git_new: Terminal_Style;
+        git_modified: Terminal_Style;
+        git_deleted: Terminal_Style;
+        git_renamed: Terminal_Style;
+        git_typechange: Terminal_Style;
+        git_ignored: Terminal_Style;
+        git_conflicted: Terminal_Style;
+    }
+
+    Pattern_Style :: struct {
+        pattern: str;
+        style: Terminal_Style;
+    }
+
+    theme: Theme;
+
+    // Style constructors -------------------------------------------------
+
+    plain :: () -> Terminal_Style {
+        return .{};
+    }
+
+    ansi :: (value: u8, flags: Terminal_Style_Flags = .None) -> Terminal_Style {
+        s: Terminal_Style;
+        s.foreground = Terminal_Color.terminal_color_ansi(value);
+        s.flags = flags;
+        return s;
+    }
+
+    indexed :: (value: u8, flags: Terminal_Style_Flags = .None) -> Terminal_Style {
+        s: Terminal_Style;
+        s.foreground = Terminal_Color.terminal_color_indexed(value);
+        s.flags = flags;
+        return s;
+    }
+
+    plain_flags :: (flags: Terminal_Style_Flags) -> Terminal_Style {
+        s: Terminal_Style;
+        s.flags = flags;
+        return s;
+    }
+
+    with_flags :: (style: Terminal_Style, flags: Terminal_Style_Flags) -> Terminal_Style {
+        s := style;
+        s.flags = s.flags | flags;
+        return s;
+    }
+
+    with_background :: (style: Terminal_Style, color: Terminal_Color) -> Terminal_Style {
+        s := style;
+        s.background = color;
+        return s;
+    }
+
+    style_is_plain :: (style: Terminal_Style) -> bool {
+        return style.foreground.kind == .Default && style.background.kind == .Default &&
+            style.flags == Terminal_Style_Flags.None;
+    }
+
+    class_style :: (class: File_Class) -> Terminal_Style {
+        return theme.class_styles[cast(ssize) class];
+    }
+
+    /// Fills `theme` with eza's default colors, then applies LS_COLORS and
+    /// EZA_COLORS (or EXA_COLORS) from the environment.
+    theme_init :: () {
+        B :: Terminal_Style_Flags.Bold;
+        U :: Terminal_Style_Flags.Underline;
+        set_class(.Normal, plain());
+        set_class(.Directory, ansi(4, B));
+        set_class(.Executable, ansi(2, B));
+        set_class(.Symlink, ansi(6));
+        set_class(.Broken_Link, ansi(1));
+        set_class(.Pipe, ansi(3));
+        set_class(.Socket, ansi(1, B));
+        set_class(.Block_Device, ansi(3, B));
+        set_class(.Char_Device, ansi(3, B));
+        set_class(.Image, ansi(5));
+        set_class(.Video, ansi(5, B));
+        set_class(.Audio, ansi(6));
+        set_class(.Lossless, ansi(6, B));
+        set_class(.Crypto, ansi(2, B));
+        set_class(.Document, ansi(2));
+        set_class(.Archive, ansi(1));
+        set_class(.Temp, plain_flags(.Dim));
+        set_class(.Compiled, ansi(3));
+        set_class(.Build, ansi(3, B | U));
+        set_class(.Source, ansi(3, B));
+        set_class(.Config, plain());
+
+        theme.punctuation = ansi(8, B);
+        theme.tree = ansi(8, B);
+        theme.header = plain_flags(U);
+        theme.link_arrow = ansi(8, B);
+        theme.link_path = ansi(6);
+        theme.control_char = ansi(1);
+
+        theme.perm_user_read = ansi(3, B);
+        theme.perm_user_write = ansi(1, B);
+        theme.perm_user_exec_file = ansi(2, B | U);
+        theme.perm_user_exec = ansi(2, B);
+        theme.perm_group_read = ansi(3);
+        theme.perm_group_write = ansi(1);
+        theme.perm_group_exec = ansi(2);
+        theme.perm_other_read = ansi(3);
+        theme.perm_other_write = ansi(1);
+        theme.perm_other_exec = ansi(2);
+        theme.perm_special_user_file = ansi(5);
+        theme.perm_special_other = ansi(5);
+        theme.perm_attribute = plain();
+
+        theme.size_styles[0] = ansi(2);
+        theme.size_styles[1] = ansi(2, B);
+        theme.size_styles[2] = ansi(3);
+        theme.size_styles[3] = ansi(1);
+        theme.size_styles[4] = ansi(5);
+        theme.size_major = ansi(2, B);
+        theme.size_minor = ansi(2);
+        theme.user_self = ansi(3, B);
+        theme.user_other = plain();
+        theme.group_self = ansi(3, B);
+        theme.group_other = plain();
+        theme.date = ansi(4);
+        theme.inode = ansi(5);
+        theme.links = ansi(1, B);
+        theme.links_multi = ansi(1, B);
+        theme.blocks = ansi(6);
+        theme.octal = ansi(5);
+
+        theme.git_new = ansi(2);
+        theme.git_modified = ansi(4);
+        theme.git_deleted = ansi(1);
+        theme.git_renamed = ansi(3);
+        theme.git_typechange = ansi(5);
+        theme.git_ignored = plain_flags(.Dim);
+        theme.git_conflicted = ansi(1);
+
+        if environment_get("LS_COLORS") == {
+            case .Ok(found);
+                if #pattern ?value = found {
+                    apply_color_spec(value.value.clone(), false);
+                }
+            else;
+        }
+        eza := environment_get("EZA_COLORS").unwrap_or(null);
+        if eza == null eza = environment_get("EXA_COLORS").unwrap_or(null);
+        if #pattern ?value = eza {
+            apply_color_spec(value.value.clone(), true);
+        }
+    }
+
+    /// Parses an SGR parameter list such as `01;38;5;208` into a style.
+    parse_sgr :: (codes: str) -> Terminal_Style {
+        style: Terminal_Style;
+        values: [..]s64;
+        defer values.free();
+        parts := codes.split(";");
+        defer parts.free();
+        for part: parts {
+            values.push(from_string(s64, part.trim()).unwrap_or(0));
+        }
+        i: ssize = 0;
+        while i < values.count {
+            v := values[i];
+            i += 1;
+            if v == {
+                case 0; style = .{};
+                case 1; style.flags |= .Bold;
+                case 2; style.flags |= .Dim;
+                case 3; style.flags |= .Italic;
+                case 4; style.flags |= .Underline;
+                case 5; style.flags |= .Blink;
+                case 7; style.flags |= .Reverse;
+                case 8; style.flags |= .Hidden;
+                case 9; style.flags |= .Strike;
+                case 30..=37; style.foreground = Terminal_Color.terminal_color_ansi(cast(u8) (v - 30));
+                case 39; style.foreground = .{};
+                case 40..=47; style.background = Terminal_Color.terminal_color_ansi(cast(u8) (v - 40));
+                case 49; style.background = .{};
+                case 90..=97; style.foreground = Terminal_Color.terminal_color_ansi(cast(u8) (v - 90 + 8));
+                case 100..=107; style.background = Terminal_Color.terminal_color_ansi(cast(u8) (v - 100 + 8));
+                case 38, 48;
+                    color: Terminal_Color;
+                    if i < values.count && values[i] == 5 && i + 1 < values.count {
+                        color = Terminal_Color.terminal_color_indexed(cast(u8) (values[i + 1] & 255));
+                        i += 2;
+                    } else if i < values.count && values[i] == 2 && i + 3 < values.count {
+                        color = Terminal_Color.terminal_color_rgb(
+                            cast(u8) (values[i + 1] & 255),
+                            cast(u8) (values[i + 2] & 255),
+                            cast(u8) (values[i + 3] & 255)
+                        );
+                        i += 4;
+                    }
+                    if v == 38 style.foreground = color;
+                    else style.background = color;
+                else;
+            }
+        }
+        return style;
+    }
+
+    /// Appends the escape sequence that switches the terminal to `style`.
+    /// Nothing is written for the plain style.
+    write_sgr :: (out: *String_Builder, style: Terminal_Style) {
+        if style_is_plain(style) return;
+        out.write_string("\x1b[");
+        first := true;
+        sep :: (out: *String_Builder, first: *bool) {
+            if !first.* out.write_byte(#char ";");
+            first.* = false;
+        }
+        flag_codes: [8]Terminal_Style_Flags = .[.Bold, .Dim, .Italic, .Underline, .Blink, .Reverse, .Hidden, .Strike];
+        flag_numbers: [8]s64 = .[1, 2, 3, 4, 5, 7, 8, 9];
+        for f, k: flag_codes {
+            if (style.flags & f) != Terminal_Style_Flags.None {
+                sep(out, &first);
+                out.write_int(flag_numbers[k]);
+            }
+        }
+        write_color(out, style.foreground, false, &first);
+        write_color(out, style.background, true, &first);
+        out.write_byte(#char "m");
+    }
+
+    /// Writes `text` wrapped in `style` and a reset (when colors are on).
+    write_styled :: (out: *String_Builder, text: str, style: Terminal_Style, color: bool) {
+        if !color || style_is_plain(style) {
+            out.write_string(text);
+            return;
+        }
+        write_sgr(out, style);
+        out.write_string(text);
+        out.write_string("\x1b[0m");
+    }
+}
+
+TEX_SOURCES: []str = .["tex"];
+JS_SOURCES: []str = .["ts", "coffee"];
+MJS_SOURCES: []str = .["mts"];
+CJS_SOURCES: []str = .["cts"];
+CSS_SOURCES: []str = .["sass", "scss", "less", "styl"];
+NO_SOURCES: []str;
+
+set_class :: (class: File_Class, style: Terminal_Style) {
+    theme.class_styles[cast(ssize) class] = style;
+}
+
+write_color :: (out: *String_Builder, color: Terminal_Color, background: bool, first: *bool) {
+    if color.kind == .Default return;
+    if !first.* out.write_byte(#char ";");
+    first.* = false;
+    if color.kind == {
+        case .Default;
+        case .Ansi;
+            v := cast(s64) color.value;
+            if v < 8 out.write_int(ifx background 40 + v else 30 + v);
+            else out.write_int(ifx background 100 + v - 8 else 90 + v - 8);
+        case .Indexed;
+            out.write_string(ifx background "48;5;" else "38;5;");
+            out.write_int(cast(s64) color.value);
+        case .Rgb;
+            out.write_string(ifx background "48;2;" else "38;2;");
+            out.write_int(cast(s64) color.red);
+            out.write_byte(#char ";");
+            out.write_int(cast(s64) color.green);
+            out.write_byte(#char ";");
+            out.write_int(cast(s64) color.blue);
+    }
+}
+
+/// Applies `key=codes:key=codes` pairs as eza 0.23 does. LS_COLORS knows only
+/// the file-kind keys; EZA_COLORS adds keys for the long-view columns and file
+/// categories. Any other key, GNU's su/sg/tw/ow/st/mi included, is a file-name
+/// glob. The text is kept for the life of the program because patterns borrow it.
+apply_color_spec :: (spec: str, eza: bool) {
+    pairs := spec.split(":");
+    defer pairs.free();
+    for pair: pairs {
+        #pattern ?kv := pair.split_once("=") else { continue; };
+        key := kv.before;
+        style := parse_sgr(kv.after);
+        if apply_kind_key(key, style) continue;
+        if eza && apply_eza_key(key, style) continue;
+        if key.count > 0 theme.patterns.push(.{ key, style });
+    }
+    // EZA_COLORS that is `reset` or begins `reset:` turns the file-category
+    // colors off, including any it sets itself: those files take `fi`.
+    // Kinds and globs stay.
+    if eza && (spec == "reset" || spec.starts_with("reset:")) {
+        normal := class_style(.Normal);
+        for i: cast(ssize) File_Class.Image..cast(ssize) File_Class.Config + 1 theme.class_styles[i] = normal;
+    }
+}
+
+/// The LS_COLORS keys eza reads; false for any other key.
+apply_kind_key :: (key: str, style: Terminal_Style) -> bool {
+    if key == {
+        case "di"; set_class(.Directory, style);
+        case "ex"; set_class(.Executable, style);
+        case "fi"; set_class(.Normal, style);
+        // eza has no `ln=target`: the value parses as no style.
+        case "ln"; set_class(.Symlink, style);
+        case "or"; set_class(.Broken_Link, style);
+        case "pi"; set_class(.Pipe, style);
+        case "so"; set_class(.Socket, style);
+        case "bd"; set_class(.Block_Device, style);
+        case "cd"; set_class(.Char_Device, style);
+        else; return false;
+    }
+    return true;
+}
+
+/// The other EZA_COLORS keys eza reads; false for any other key.
+apply_eza_key :: (key: str, style: Terminal_Style) -> bool {
+    if key == {
+        case "ur"; theme.perm_user_read = style;
+        case "uw"; theme.perm_user_write = style;
+        case "ux"; theme.perm_user_exec_file = style;
+        case "ue"; theme.perm_user_exec = style;
+        case "gr"; theme.perm_group_read = style;
+        case "gw"; theme.perm_group_write = style;
+        case "gx"; theme.perm_group_exec = style;
+        case "tr"; theme.perm_other_read = style;
+        case "tw"; theme.perm_other_write = style;
+        case "tx"; theme.perm_other_exec = style;
+        case "su"; theme.perm_special_user_file = style;
+        case "sf"; theme.perm_special_other = style;
+        case "xa"; theme.perm_attribute = style;
+        case "sn"; for k: 0..5 theme.size_styles[k] = style;
+        case "nb"; theme.size_styles[0] = style;
+        case "nk"; theme.size_styles[1] = style;
+        case "nm"; theme.size_styles[2] = style;
+        case "ng"; theme.size_styles[3] = style;
+        case "nt"; theme.size_styles[4] = style;
+        case "df"; theme.size_major = style;
+        case "ds"; theme.size_minor = style;
+        case "uu"; theme.user_self = style;
+        case "un"; theme.user_other = style;
+        case "gu"; theme.group_self = style;
+        case "gn"; theme.group_other = style;
+        case "lc"; theme.links = style;
+        case "lm"; theme.links_multi = style;
+        case "ga"; theme.git_new = style;
+        case "gm"; theme.git_modified = style;
+        case "gd"; theme.git_deleted = style;
+        case "gv"; theme.git_renamed = style;
+        case "gt"; theme.git_typechange = style;
+        case "gi"; theme.git_ignored = style;
+        case "gc"; theme.git_conflicted = style;
+        case "xx"; theme.punctuation = style;
+        case "da"; theme.date = style;
+        case "in"; theme.inode = style;
+        case "bl"; theme.blocks = style;
+        case "hd"; theme.header = style;
+        case "lp"; theme.link_path = style;
+        case "cc"; theme.control_char = style;
+        case "im"; set_class(.Image, style);
+        case "vi"; set_class(.Video, style);
+        case "mu"; set_class(.Audio, style);
+        case "lo"; set_class(.Lossless, style);
+        case "cr"; set_class(.Crypto, style);
+        case "do"; set_class(.Document, style);
+        case "co"; set_class(.Archive, style);
+        case "tm"; set_class(.Temp, style);
+        case "cm"; set_class(.Compiled, style);
+        case "bu"; set_class(.Build, style);
+        case "sc"; set_class(.Source, style);
+        // Known to eza but not drawn by fls; they are not globs.
+        case "Gc", "Gd", "Gm", "Go", "Sl", "Sn", "Sr", "St", "Su", "bO", "ff",
+            "gR", "mp", "oc", "sb", "sp", "uR", "ub", "ug", "uk", "um", "ut";
+        else; return false;
+    }
+    return true;
+}
+
+#public {
+    /// The category of a regular file, from its name and extension
+    /// (eza's file-type rules).
+    classify_name :: (name: str) -> File_Class {
+        if name == {
+            case "Makefile", "makefile", "GNUmakefile", "CMakeLists.txt", "Cargo.toml",
+                "package.json", "build.gradle", "pom.xml", "meson.build", "SConstruct",
+                "Rakefile", "Gemfile", "Justfile", "justfile", "Dockerfile", "Containerfile",
+                "flake.nix", "BUILD", "BUILD.bazel", "WORKSPACE", "build.zig", "configure",
+                "Taskfile.yml", "Vagrantfile", "Procfile", "Pipfile", "Brewfile",
+                "README", "README.md", "README.txt", "readme.md", "README.rst", "INSTALL";
+                return .Build;
+            else;
+        }
+        if name.count > 0 && name[name.count - 1] == #char "~" return .Temp;
+        if name.count > 1 && name[0] == #char "#" && name[name.count - 1] == #char "#" return .Temp;
+        ext := extension_of(name);
+        if ext.count == 0 return .Normal;
+        if ext == {
+            case "png", "jpg", "jpeg", "gif", "bmp", "tiff", "tif", "webp", "svg", "ico",
+                "heic", "heif", "avif", "psd", "xcf", "raw", "cr2", "nef", "ppm", "pgm", "pbm",
+                "xpm", "jxl", "eps", "exr", "arw", "dng", "orf", "pnm", "qoi";
+                return .Image;
+            case "mp4", "mkv", "webm", "avi", "mov", "wmv", "flv", "m4v", "mpg", "mpeg",
+                "3gp", "ogv", "vob", "m2ts", "h264";
+                return .Video;
+            case "mp3", "ogg", "m4a", "aac", "wma", "opus", "mka", "mid", "midi", "oga", "spx";
+                return .Audio;
+            case "flac", "wav", "alac", "ape", "aiff", "aif", "wv", "dsf", "dff";
+                return .Lossless;
+            case "asc", "gpg", "pgp", "sig", "signature", "pem", "crt", "cer", "p12",
+                "pfx", "kbx", "enc", "age", "pub", "der", "csr", "p7s", "jks", "kdbx", "md5",
+                "sha1", "sha256", "sha512", "sha1sum", "sha256sum";
+                return .Crypto;
+            case "pdf", "doc", "docx", "odt", "rtf", "xls", "xlsx", "ods", "ppt", "pptx",
+                "odp", "djvu", "pages", "numbers", "key", "ps", "xps", "gdoc", "gsheet";
+                return .Document;
+            case "zip", "tar", "gz", "tgz", "bz2", "tbz", "tbz2", "xz", "txz", "zst", "lz",
+                "lz4", "lzma", "7z", "rar", "deb", "rpm", "iso", "dmg", "cab", "arj", "z",
+                "cpio", "xpi", "squashfs", "lzo", "lzh", "br", "zstd", "pkg", "ar", "arc", "zoo";
+                return .Archive;
+            case "tmp", "swp", "swo", "swn", "bak", "part", "crdownload", "temp", "dpkg-old",
+                "dpkg-dist", "dpkg-new", "rej";
+                return .Temp;
+            case "o", "a", "so", "dll", "dylib", "class", "pyc", "pyo", "elc", "obj", "lib",
+                "ko", "beam", "hi", "rlib", "pdb", "lo", "la", "zwc", "dyn_o", "dyn_hi";
+                return .Compiled;
+            case "c", "h", "cc", "cpp", "cxx", "hpp", "hh", "hxx", "c++", "rs", "go", "py", "rb",
+                "js", "ts", "jsx", "java", "kt", "kts", "scala", "swift", "m", "mm", "cs",
+                "fs", "fsx", "hs", "lhs", "ml", "mli", "ex", "exs", "erl", "hrl", "clj",
+                "cljs", "cljc", "lisp", "el", "scm", "rkt", "lua", "pl", "pm", "php", "ps1",
+                "zig", "d", "v", "sv", "vhd", "dart", "jl", "r", "sql", "awk", "css", "scss",
+                "sass", "less", "tex", "groovy", "f90", "f", "for", "ada", "adb", "ads", "pas",
+                "cob", "nb", "purs", "elm", "cr", "coffee", "tcl", "vb", "asp", "jsp", "ipynb",
+                "zz_unused";
+                return .Source;
+            else;
+        }
+        return .Normal;
+    }
+
+    /// Extensions that count as compiled output only when a source file
+    /// with the same stem sits next to them (eza's rule): `x.log` beside
+    /// `x.tex`, `x.js` beside `x.ts`, `x.css` beside `x.scss`.
+    compiled_sources :: (ext: str) -> []str {
+        if ext == {
+            case "aux", "bbl", "bcf", "blg", "fdb_latexmk", "fls", "idx", "ilg", "ind", "log",
+                "out", "toc", "lof", "lot", "nav", "snm", "xdv";
+                return TEX_SOURCES;
+            case "js"; return JS_SOURCES;
+            case "mjs"; return MJS_SOURCES;
+            case "cjs"; return CJS_SOURCES;
+            case "css"; return CSS_SOURCES;
+            else; return NO_SOURCES;
+        }
+    }
+
+    /// A style from LS_COLORS glob patterns for `name`, if one matches.
+    pattern_style :: (name: str) -> ?Terminal_Style {
+        // Later entries win, as in GNU ls.
+        for < i: 0..theme.patterns.count {
+            p := theme.patterns[i];
+            if p.pattern.count > 1 && p.pattern[0] == #char "*" && !p.pattern[1..p.pattern.count].contains("*") &&
+                !p.pattern.contains("?") && !p.pattern.contains("[") {
+                suffix := p.pattern[1..p.pattern.count];
+                if name.count >= suffix.count &&
+                    contains_fold(name[name.count - suffix.count..name.count], suffix) &&
+                    text_width(suffix) == suffix.count
+                    return p.style;
+                continue;
+            }
+            if glob_match(p.pattern, name) return p.style;
+        }
+        return null;
+    }
+
+    /// Icon for a name of the given class (Nerd Font glyphs, as eza draws them).
+    icon_for :: (name: str, class: File_Class, is_dir: bool, empty_dir := false) -> str {
+        if is_dir {
+            if name == {
+                case ".git"; return "\u{e5fb}";
+                case ".github"; return "\u{e5fd}";
+                case ".config", "config", "include", "xorg.conf.d"; return "\u{e5fc}";
+                case "node_modules"; return "\u{e5fa}";
+                case "Desktop"; return "\u{f108}";
+                case "Documents"; return "\u{f0c82}";
+                case "Downloads"; return "\u{f024d}";
+                case "Music"; return "\u{f1359}";
+                case "Pictures"; return "\u{f024f}";
+                case "Videos"; return "\u{f03d}";
+                case "src"; return "\u{f08de}";
+                case "build"; return "\u{f19fc}";
+                case ".ssh", "ssh", "pam.d", ".gnupg"; return "\u{f08ac}";
+                case ".npm"; return "\u{e5fa}";
+                else;
+            }
+            return ifx empty_dir "\u{f115}" else "\u{e5ff}";
+        }
+        if name == {
+            case ".gitignore", ".gitattributes", ".gitmodules", ".gitconfig", ".git-blame-ignore-revs"; return "\u{f02a2}";
+            case "Makefile", "makefile", "GNUmakefile"; return "\u{e673}";
+            case "Justfile", "justfile"; return "\u{f0ad}";
+            case "Dockerfile", "Containerfile", "docker-compose.yml", "docker-compose.yaml",
+                "compose.yml", "compose.yaml"; return "\u{e650}";
+            case "LICENSE", "LICENSE.md", "LICENSE.txt", "COPYING", "LICENCE"; return "\u{f02d}";
+            case "README", "README.md", "README.txt", "README.rst"; return "\u{f00ba}";
+            case "CHANGELOG", "CHANGELOG.md"; return "\u{f1ea}";
+            case "TODO", "TODO.md", "TODO.txt"; return "\u{f0ae}";
+            case "group", "gshadow", "passwd", "shadow", "sudoers", ".htpasswd"; return "\u{f023}";
+            case "bashrc", "profile", "bash_profile", "zshrc", "zprofile", "zshenv"; return "\u{f1183}";
+            case "hostname", "inputrc", "locale.conf", "resolv.conf", "nsswitch.conf", "shells", "environment"; return "\u{f107b}";
+            case ".gtkrc-2.0", "gtkrc", "gtkrc-2.0"; return "\u{f362}";
+            case ".Xresources", ".Xauthority", ".xinitrc", ".xprofile", ".xsession"; return "\u{f369}";
+            case ".python_history", ".pythonrc"; return "\u{e606}";
+            case "QtProject.conf"; return "\u{f375}";
+            case "localtime", "timezone"; return "\u{f43a}";
+            case "Cargo.toml", "Cargo.lock"; return "\u{e68b}";
+            case "flake.nix", "flake.lock", "default.nix", "shell.nix"; return "\u{f313}";
+            case "package.json", "package-lock.json"; return "\u{e71e}";
+            case ".bashrc", ".zshrc", ".profile", ".bash_profile", ".zprofile", ".bash_history",
+                ".zsh_history", ".zshenv", ".bash_logout"; return "\u{f1183}";
+            case ".vimrc", "init.vim", ".viminfo", ".gvimrc"; return "\u{e7c5}";
+            case ".emacs", "init.el"; return "\u{e632}";
+            case ".editorconfig"; return "\u{e652}";
+            case "go.mod", "go.sum", "go.work"; return "\u{e65e}";
+            case "CMakeLists.txt"; return "\u{e794}";
+            else;
+        }
+        ext := extension_of(name);
+        if ext == {
+            case "rs", "rlib", "rmeta"; return "\u{e68b}";
+            case "py", "pyc", "pyo", "pyi", "pyd", "whl"; return "\u{e606}";
+            case "ipynb"; return "\u{e678}";
+            case "coffee"; return "\u{f0f4}";
+            case "cr"; return "\u{e62f}";
+            case "elm"; return "\u{e62c}";
+            case "purs"; return "\u{e630}";
+            case "lisp"; return "\u{f0172}";
+            case "scm", "rkt"; return "\u{e6b1}";
+            case "f90"; return "\u{f121a}";
+            case "vala"; return "\u{e8d1}";
+            case "styl"; return "\u{e600}";
+            case "hbs"; return "\u{e60f}";
+            case "ejs"; return "\u{e618}";
+            case "twig"; return "\u{e61c}";
+            case "qml"; return "\u{f375}";
+            case "cue"; return "\u{f0cb9}";
+            case "mk"; return "\u{e673}";
+            case "cmake"; return "\u{e794}";
+            case "ninja"; return "\u{f0774}";
+            case "blend"; return "\u{f00ab}";
+            case "obj", "stl", "fbx"; return "\u{f01a7}";
+            case "dwg"; return "\u{f0eeb}";
+            case "ai"; return "\u{e7b4}";
+            case "ps", "eps"; return "\u{f0559}";
+            case "js", "mjs", "cjs"; return "\u{e74e}";
+            case "ts", "mts", "cts"; return "\u{e628}";
+            case "jsx", "tsx"; return "\u{e7ba}";
+            case "go"; return "\u{e65e}";
+            case "c", "h"; return "\u{e61e}";
+            case "cpp", "cc", "cxx", "c++", "hpp", "hh", "hxx"; return "\u{e61d}";
+            case "cs"; return "\u{f031b}";
+            case "java", "jar", "class"; return "\u{e256}";
+            case "kt", "kts"; return "\u{e634}";
+            case "scala"; return "\u{e737}";
+            case "swift"; return "\u{e755}";
+            case "rb", "gem"; return "\u{e739}";
+            case "php"; return "\u{e73d}";
+            case "lua"; return "\u{e620}";
+            case "hs", "lhs"; return "\u{e777}";
+            case "ml", "mli"; return "\u{e67a}";
+            case "ex", "exs"; return "\u{e62d}";
+            case "erl", "hrl"; return "\u{e7b1}";
+            case "clj", "cljs", "cljc", "edn"; return "\u{e768}";
+            case "el", "elc"; return "\u{e632}";
+            case "zig"; return "\u{e6a9}";
+            case "nim"; return "\u{e677}";
+            case "d"; return "\u{e7af}";
+            case "v"; return "\u{e6ac}";
+            case "dart"; return "\u{e798}";
+            case "jl"; return "\u{e624}";
+            case "r"; return "\u{e68a}";
+            case "pl", "pm"; return "\u{e67e}";
+            case "nix"; return "\u{f313}";
+            case "vim"; return "\u{e7c5}";
+            case "gleam"; return "\u{f09a5}";
+            case "graphql", "gql"; return "\u{e662}";
+            case "tf", "tfvars"; return "\u{f1062}";
+            case "asm", "s"; return "\u{e637}";
+            case "sh", "bash", "zsh", "fish", "ksh", "csh", "awk"; return "\u{f489}";
+            case "ps1", "psm1", "psd1"; return "\u{ebc7}";
+            case "bat", "cmd", "exe"; return "\u{ebc4}";
+            case "html", "htm", "xhtml"; return "\u{f13b}";
+            case "css"; return "\u{e749}";
+            case "scss", "sass"; return "\u{e603}";
+            case "less"; return "\u{e758}";
+            case "vue"; return "\u{f0844}";
+            case "svelte"; return "\u{e697}";
+            case "json", "jsonc", "json5", "properties"; return "\u{e60b}";
+            case "yaml", "yml"; return "\u{e8eb}";
+            case "toml"; return "\u{e6b2}";
+            case "xml", "plist", "xsd", "xsl", "xaml"; return "\u{f05c0}";
+            case "ini", "cfg", "conf", "config", "desktop"; return "\u{f107b}";
+            case "env"; return "\u{f462}";
+            case "lock"; return "\u{f023}";
+            case "md", "markdown", "mdx", "rmd"; return "\u{f48a}";
+            case "org"; return "\u{e633}";
+            case "txt", "rst", "text", "adoc"; return "\u{f15c}";
+            case "tex", "bib", "sty", "cls", "ltx"; return "\u{e69b}";
+            case "pdf"; return "\u{f1c1}";
+            case "doc", "docx", "rtf"; return "\u{f1c2}";
+            case "odt"; return "\u{f37c}";
+            case "xls", "xlsx"; return "\u{f1c3}";
+            case "ods"; return "\u{f378}";
+            case "ppt", "pptx"; return "\u{f1c4}";
+            case "odp"; return "\u{f37a}";
+            case "csv"; return "\u{eefc}";
+            case "tsv"; return "\u{f1c3}";
+            case "epub", "mobi", "djvu", "azw", "azw3"; return "\u{e28b}";
+            case "sql", "db", "mdb"; return "\u{f1c0}";
+            case "sqlite", "sqlite3", "db3"; return "\u{e7c4}";
+            case "diff", "patch"; return "\u{f440}";
+            case "log"; return "\u{f18d}";
+            case "ttf", "otf", "woff", "woff2", "eot", "fnt", "ttc"; return "\u{f031}";
+            case "msi"; return "\u{f17a}";
+            case "deb"; return "\u{e77d}";
+            case "rpm"; return "\u{e7bb}";
+            case "apk"; return "\u{e70e}";
+            case "iso", "img", "dmg"; return "\u{e271}";
+            case "o", "bin"; return "\u{eae8}";
+            case "out"; return "\u{eb2c}";
+            case "a", "so"; return "\u{f17c}";
+            case "dll", "lib"; return "\u{eb9c}";
+            case "dylib"; return "\u{f179}";
+            case "pem", "crt", "cer", "der", "key", "p12", "pfx"; return "\u{eb11}";
+            case "asc", "gpg", "pgp", "sig", "age"; return "\u{f099d}";
+            case "pub"; return "\u{f0dd6}";
+            case "psd"; return "\u{e7b8}";
+            case "svg"; return "\u{f0559}";
+            case "part"; return "\u{f01da}";
+            case "cache"; return "\u{f49b}";
+            else;
+        }
+        if class == {
+            case .Image; return "\u{f1c5}";
+            case .Video; return "\u{f03d}";
+            case .Audio, .Lossless; return "\u{f001}";
+            case .Archive; return "\u{f410}";
+            else;
+        }
+        if ext.count == 0 return "\u{f086f}";
+        return "\u{f15b}";
+    }
+}

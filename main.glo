@@ -1,0 +1,43 @@
+//! fls - a fancy ls: eza-style listings and an nnn-style browser.
+
+#import "Io";
+#import "Format";
+#import "Strings";
+#import "File_System/File";
+#import "src/util.glo";
+#import "src/options.glo";
+#import "src/cli.glo";
+#import "src/tui.glo";
+
+has_flag :: (args: []const str, prefix: str) -> bool {
+    for arg: args if arg.starts_with(prefix) return true;
+    return false;
+}
+
+main :: () -> s32 {
+    args := get_cmdline_args();
+    options: Options;
+    defer free_options(&options);
+    rest := args[1..];
+    parsed := parse_options(rest, &options);
+    if !parsed.ok {
+        stderr := File.stderr();
+        defer stderr.free();
+        _ := stderr.writef("fls: {}\nTry 'fls --help' for more information.\n", parsed.message);
+        return 3;
+    }
+    if options.help {
+        print("{}", usage_text());
+        return 0;
+    }
+    if options.version {
+        print("fls {}\n", FLS_VERSION);
+        return 0;
+    }
+    if options.tui || options.snapshot {
+        // The browser shows icons unless asked not to.
+        if options.icons == .Never && !has_flag(rest, "--icons") && !has_flag(rest, "--no-icons") options.icons = .Always;
+        return run_tui(&options, options.snapshot, options.keys);
+    }
+    return run_cli(&options);
+}

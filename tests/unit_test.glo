@@ -1,0 +1,68 @@
+// Unit tests for the pure helpers: `glosso --run tests/unit_test.glo`.
+#import "Io";
+#import "Format";
+#import "Terminal";
+#import "../src/util.glo";
+#import "../src/theme.glo";
+
+failures := 0;
+
+check :: (ok: bool, what: str) {
+    if ok return;
+    failures += 1;
+    print("FAIL: {}\n", what);
+}
+
+check_size :: (bytes: s64, fmt: Size_Format, expected: str) {
+    number, unit := human_size(bytes, fmt);
+    got := tprint("{}{}", number, unit);
+    check(got == expected, tprint("human_size({}) = {}, expected {}", bytes, got, expected));
+}
+
+main :: () -> s32 {
+    // natord ordering, as eza sorts names
+    check(natural_compare("file2", "file10", true) == .Less, "file2 < file10");
+    check(natural_compare("a", "B", true) == .Less, "a < B ignoring case");
+    check(natural_compare("B", "a", false) == .Less, "B < a by code point");
+    check(natural_compare("Justfile", "justfile", true) == .Equal, "case-folded names tie");
+    check(natural_compare("x 1", "x1", true) == .Equal, "whitespace is skipped");
+    check(natural_compare("a+b", "a c", true) == .Less, "'+' sorts before 'c' once the space is skipped");
+    check(natural_compare("v1.010", "v1.09", true) == .Less, "leading zeros compare as fractions");
+
+    check(glob_match("*.rs", "main.rs"), "*.rs");
+    check(!glob_match("*.rs", "main.go"), "*.rs rejects .go");
+    check(glob_match("t?st", "test"), "?");
+    check(glob_match("[a-c]*", "beta") && !glob_match("[!a-c]*", "beta"), "classes");
+
+    check(base_name("/a/b/c/") == "c" && parent_path("/a/b/c") == "/a/b" && parent_path("/a") == "/", "paths");
+    check(extension_of("Foo.TAR.GZ") == "gz" && extension_of(".bashrc") == "bashrc" && extension_of("Makefile") == "", "extensions");
+
+    check_size(999, .Decimal, "999");
+    check_size(1234, .Decimal, "1.2k");
+    check_size(1250, .Decimal, "1.2k");      // ties to even below ten
+    check_size(1150, .Decimal, "1.1k");      // 1.15 is below the tie as a double
+    check_size(22500, .Decimal, "23k");      // half away from zero from ten up
+    check_size(9960, .Decimal, "10.0k");
+    check_size(1003, .Binary, "1,003");
+    check_size(15360, .Binary, "15Ki");
+    check_size(5212064, .Decimal, "5.2M");
+    check_size(1234567, .Bytes, "1,234,567");
+
+    check(relative_time(7200) == "2 hours" && relative_time(86400 * 21) == "3 weeks", "relative time");
+    check(fit_width("hello world", 6) == "hello~", "fit_width");
+
+    theme_init();
+    check(classify_name("main.rs") == .Source && classify_name("a.png") == .Image &&
+        classify_name("Makefile") == .Build && classify_name("x.log") == .Normal, "classes");
+    check(icon_for("src", .Directory, true) == "\u{f08de}" && icon_for("x", .Directory, true, true) == "\u{f115}", "icons");
+    style := parse_sgr("01;38;5;208");
+    check(style.foreground.kind == .Indexed && style.foreground.value == 208 &&
+        (style.flags & Terminal_Style_Flags.Bold) != Terminal_Style_Flags.None, "parse_sgr");
+
+    if failures > 0 {
+        print("{} failure(s)\n", failures);
+        return 1;
+    }
+    print("unit tests passed\n");
+    return 0;
+}

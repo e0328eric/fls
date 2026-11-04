@@ -1,0 +1,1510 @@
+//! fls/src/tui.glo - an nnn-style terminal file browser.
+//!
+//! Four contexts (tabs), type-to-filter, a selection that spans directories
+//! with copy/move/delete, rename and create prompts, opening files with the
+//! system opener or $EDITOR, a shell in the current directory, a sort menu,
+//! a detail mode, a preview pane, and info and help overlays.
+
+#import "Io";
+#import "Format";
+#import "Strings";
+#import "String_Builder";
+#import "Context";
+#import "Terminal";
+#import "Terminal/Text_Input";
+#import "Time";
+#import "File_System/File";
+#import "File_System/Types";
+#import "File_System/System";
+#import "File_System/Directory";
+#import "File_System/Metadata";
+#import "File_System/Copy";
+#import "Process/Environment";
+#import "Process/Command";
+#import "Memory/Ownership";
+#import "util.glo";
+#import "theme.glo";
+#import "entry.glo";
+#import "options.glo";
+
+CONTEXTS :: 4;
+
+Mode :: enum {
+    Normal;
+    Filter;
+    Prompt;
+    Confirm;
+    Sort_Menu;
+    Help;
+    Info;
+}
+
+Prompt_Kind :: enum {
+    None;
+    Rename;
+    Create;
+    Change_Dir;
+    Open_With;
+}
+
+Confirm_Kind :: enum {
+    None;
+    Delete;
+}
+
+Tab :: struct {
+    used: bool;
+    path: str;
+    previous: str;
+    cursor: ssize;
+    scroll: ssize;
+    filter: str;
+    hidden: bool;
+    sort: Sort_Options;
+}
+
+Tab ::: instance Freeable {
+    free :: (x: *Tab) {
+        free_string(&x.path);
+        free_string(&x.previous);
+        free_string(&x.filter);
+    }
+}
+
+Preview :: struct {
+    path: str;
+    modified: s64;
+    lines: [..]str;
+    entries: [..]Entry;
+    is_dir: bool;
+    binary: bool;
+    message: str;
+}
+
+Preview ::: instance Freeable {
+    free :: (x: *Preview) {
+        free_string(&x.path);
+        free_string(&x.message);
+        for line: x.lines line.free();
+        x.lines.free();
+        free(&x.entries);
+    }
+}
+
+App :: struct {
+    options: *Options;
+    tabs: [CONTEXTS]Tab;
+    current: ssize;
+    entries: [..]Entry;
+    /// Indices into `entries` that pass the filter, in display order.
+    view: [..]ssize;
+    selection: [..]str;
+    mode: Mode;
+    prompt: Prompt_Kind;
+    confirm: Confirm_Kind;
+    input: Terminal_Text_Input;
+    message: str;
+    message_error: bool;
+    detail: bool;
+    icons: bool;
+    preview_on: bool = true;
+    preview: Preview;
+    start_dir: str;
+    home: str;
+    dir_modified: s64;
+    load_error: str;
+    quit: bool;
+    write_cd: bool;
+    list_rows: ssize = 1;
+    last_click_ms: s64;
+    last_click_row: ssize = -1;
+    /// Set while the terminal is handed to another program.
+    suspended: bool;
+    session: Terminal_Session;
+    have_session: bool;
+}
+
+App ::: instance Freeable {
+    free :: (x: *App) {
+        for i: 0..CONTEXTS free(&x.tabs[i]);
+        free(&x.entries);
+        x.view.free();
+        for path: x.selection path.free();
+        x.selection.free();
+        x.input.free();
+        free_string(&x.message);
+        free(&x.preview);
+        free_string(&x.start_dir);
+        free_string(&x.home);
+        free_string(&x.load_error);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Palette for the browser chrome (entries use the shared theme).
+
+bar_bg :: () -> Terminal_Color { return Terminal_Color.terminal_color_indexed(236); }
+cursor_bg :: () -> Terminal_Color { return Terminal_Color.terminal_color_indexed(238); }
+
+chrome :: (fg: u8, bg: Terminal_Color = .{}, flags: Terminal_Style_Flags = .None) -> Terminal_Style {
+    s: Terminal_Style;
+    s.foreground = Terminal_Color.terminal_color_indexed(fg);
+    s.background = bg;
+    s.flags = flags;
+    return s;
+}
+
+// ---------------------------------------------------------------------------
+// Entry point.
+
+#public {
+    run_tui :: (options: *Options, snapshot: bool, keys: str) -> s32 {
+        theme_init();
+        app: App;
+        defer free(&app);
+        app.options = options;
+        app.icons = options.icons != .Never;
+        app.detail = options.layout == .Long;
+        app.home = environment_get_or("HOME", "").unwrap_or("".clone());
+        start := ifx options.paths.count > 0 options.paths[0] else ".";
+        resolved := canonical(start).unwrap_or("");
+        if resolved.count == 0 || !is_directory(resolved).unwrap_or(false) {
+            resolved.free();
+            stderr := File.stderr();
+            defer stderr.free();
+            _ := stderr.writef("fls: {}: not a directory\n", start);
+            return 2;
+        }
+        app.start_dir = resolved;
+        tab := &app.tabs[0];
+        tab.used = true;
+        tab.path = app.start_dir.clone();
+        tab.hidden = options.filter.all > 0;
+        tab.sort = options.sort;
+        if tab.sort.grouping == .None tab.sort.grouping = .First;
+        load_current(&app, "");
+
+        if snapshot return run_snapshot(&app, keys);
+        status := run_interactive(&app);
+        if app.write_cd && options.cd_file.count > 0 {
+            _ := write_file(options.cd_file, tprint("{}\n", current_tab(&app).path));
+        }
+        return status;
+    }
+}
+
+run_interactive :: (app: *App) -> s32 {
+    if !begin_session(app) {
+        stderr := File.stderr();
+        defer stderr.free();
+        _ := stderr.writef("fls: the browser needs an interactive terminal\n");
+        return 2;
+    }
+    defer end_session(app);
+    canvas := Terminal_Canvas.terminal_canvas_init(80, 24);
+    defer canvas.free();
+    dirty := true;
+    idle_ticks := 0;
+    while !app.quit {
+        if app.session.size() == {
+            case .Ok(size);
+                w := cast(ssize) size.columns.max(1);
+                h := cast(ssize) size.rows.max(1);
+                if w != canvas.width || h != canvas.height {
+                    canvas.resize(w, h);
+                    dirty = true;
+                }
+            else;
+        }
+        if dirty {
+            caret := render(app, &canvas);
+            if canvas.render_at(&app.session, 0, 0) == {
+                case .Err; return 1;
+                else;
+            }
+            _ = app.session.cursor_show(caret.x >= 0);
+            if caret.x >= 0 _ = app.session.cursor_to(cast(s64) caret.x, cast(s64) caret.y);
+            _ = app.session.flush();
+            dirty = false;
+            reset_temporary_storage();
+        }
+        event := app.session.read_event(1000);
+        if app.session.input_closed break;
+        if event.kind == {
+            case .Key;
+                handle_key(app, event.key, &canvas);
+                dirty = true;
+            case .Mouse;
+                if handle_mouse(app, event.mouse, &canvas) dirty = true;
+            case .Resize;
+                dirty = true;
+            case .None;
+                // Idle: pick up changes made by other programs.
+                idle_ticks += 1;
+                if app.mode == .Normal && directory_changed(app) {
+                    reload_keep_cursor(app);
+                    dirty = true;
+                }
+            else;
+        }
+    }
+    return 0;
+}
+
+begin_session :: (app: *App) -> bool {
+    flags := Terminal_Flags.Default | Terminal_Flags.Mouse | Terminal_Flags.Bracketed_Paste;
+    if Terminal_Session.terminal_begin(flags, .title = "fls") == {
+        case .Ok(session);
+            app.session = session;
+            app.have_session = true;
+            return true;
+        case .Err;
+            return false;
+    }
+}
+
+end_session :: (app: *App) {
+    if !app.have_session return;
+    app.session.end();
+    app.session.free();
+    app.have_session = false;
+}
+
+/// Renders the canvas as plain text after replaying `keys`; used by tests
+/// and by `--snapshot` to look at the interface without a terminal.
+run_snapshot :: (app: *App, keys: str) -> s32 {
+    width: ssize = ifx app.options.width > 0 app.options.width else 100;
+    height: ssize = 30;
+    canvas := Terminal_Canvas.terminal_canvas_init(width, height);
+    defer canvas.free();
+    i: ssize = 0;
+    while i < keys.count {
+        key, used := parse_key_token(keys, i);
+        i += used;
+        render(app, &canvas);
+        handle_key(app, key, &canvas);
+        if app.quit break;
+    }
+    render(app, &canvas);
+    out: String_Builder;
+    defer out.free();
+    for y: 0..canvas.height {
+        line_start := out.len();
+        for x: 0..canvas.width {
+            cell := canvas.cells[y * canvas.width + x];
+            if cell.width == 0 continue;
+            out.write_rune(cast(rune) cell.rune);
+            for mark: cell.marks out.write_rune(cast(rune) mark);
+        }
+        // Trim trailing blanks.
+        text := out.to_string();
+        end := text.count;
+        while end > line_start && text[end - 1] == #char " " end -= 1;
+        out.truncate(end);
+        out.write_byte(10);
+    }
+    print("{}", out.to_string());
+    return 0;
+}
+
+/// One key from a script: a character, or `<Name>` such as `<Enter>`,
+/// `<Esc>`, `<Up>`, `<C-d>`, `<Space>`, `<Tab>`, `<BS>`.
+parse_key_token :: (keys: str, i: ssize) -> (Terminal_Key, ssize) {
+    key: Terminal_Key;
+    key.code = .Character;
+    if keys[i] == #char "<" {
+        j := i + 1;
+        while j < keys.count && keys[j] != #char ">" j += 1;
+        if j < keys.count {
+            name := keys[i + 1..j];
+            used := j - i + 1;
+            if name == {
+                case "Enter", "CR"; key.code = .Enter;
+                case "Esc"; key.code = .Escape;
+                case "Up"; key.code = .Up;
+                case "Down"; key.code = .Down;
+                case "Left"; key.code = .Left;
+                case "Right"; key.code = .Right;
+                case "Home"; key.code = .Home;
+                case "End"; key.code = .End;
+                case "PgUp"; key.code = .Page_Up;
+                case "PgDn"; key.code = .Page_Down;
+                case "Tab"; key.code = .Tab;
+                case "S-Tab"; key.code = .Tab; key.shift = true;
+                case "BS"; key.code = .Backspace;
+                case "Del"; key.code = .Delete;
+                case "Space"; key.rune = 32;
+                case "lt"; key.rune = cast(u32) #char "<";
+                else;
+                    if name.count == 3 && name[0] == #char "C" && name[1] == #char "-" {
+                        key.ctrl = true;
+                        key.rune = cast(u32) name[2];
+                    }
+            }
+            return key, used;
+        }
+    }
+    value, count := decode_utf8(keys, i);
+    key.rune = value;
+    return key, count;
+}
+
+// ---------------------------------------------------------------------------
+// Directory state.
+
+current_tab :: (app: *App) -> *Tab {
+    return &app.tabs[app.current];
+}
+
+current_entry :: (app: *App) -> ?*Entry {
+    tab := current_tab(app);
+    if tab.cursor < 0 || tab.cursor >= app.view.count return null;
+    return &app.entries[app.view[tab.cursor]];
+}
+
+set_message :: (app: *App, text: str, error := false) {
+    set_string(&app.message, text);
+    app.message_error = error;
+}
+
+/// Loads the current tab's directory; puts the cursor on `focus` if given.
+load_current :: (app: *App, focus: str) {
+    tab := current_tab(app);
+    free(&app.entries);
+    empty: [..]Entry;
+    app.entries = empty;
+    free_string(&app.load_error);
+    filter: Filter_Options;
+    filter.all = ifx tab.hidden 1 else 0;
+    if load_directory(tab.path, &filter) == {
+        case .Ok(list);
+            app.entries = list;
+        case .Err(error);
+            app.load_error = tprint("{}: {}", os_error_text(error.os_code), tab.path).clone();
+    }
+    sort_entries(app.entries[..], tab.sort);
+    app.dir_modified = directory_mtime(tab.path);
+    rebuild_view(app);
+    if focus.count > 0 {
+        for index, row: app.view {
+            if app.entries[index].name == focus {
+                tab.cursor = row;
+                break;
+            }
+        }
+    }
+    clamp_cursor(app);
+}
+
+directory_mtime :: (path: str) -> s64 {
+    #pattern .Ok(m) := metadata(path) else { return 0; };
+    return m.modified.seconds * 1_000_000_000 + cast(s64) m.modified.nanoseconds;
+}
+
+directory_changed :: (app: *App) -> bool {
+    return directory_mtime(current_tab(app).path) != app.dir_modified;
+}
+
+reload_keep_cursor :: (app: *App) {
+    focus := "";
+    if #pattern ?e = current_entry(app) focus = tprint("{}", e.name);
+    load_current(app, focus);
+}
+
+rebuild_view :: (app: *App) {
+    tab := current_tab(app);
+    app.view.clear();
+    for e, i: app.entries {
+        if tab.filter.count > 0 && !contains_fold(e.name, tab.filter) continue;
+        app.view.push(i);
+    }
+}
+
+clamp_cursor :: (app: *App) {
+    tab := current_tab(app);
+    if tab.cursor >= app.view.count tab.cursor = app.view.count - 1;
+    if tab.cursor < 0 tab.cursor = 0;
+}
+
+/// Changes the current tab's directory, remembering where it came from.
+change_dir :: (app: *App, path: str, focus: str = "") {
+    resolved := canonical(path).unwrap_or("");
+    if resolved.count == 0 || !is_directory(resolved).unwrap_or(false) {
+        resolved.free();
+        set_message(app, tprint("cannot open {}", path), true);
+        return;
+    }
+    tab := current_tab(app);
+    if resolved == tab.path {
+        resolved.free();
+        return;
+    }
+    free_string(&tab.previous);
+    tab.previous = value_take(&tab.path);
+    tab.path = resolved;
+    free_string(&tab.filter);
+    tab.cursor = 0;
+    tab.scroll = 0;
+    load_current(app, focus);
+}
+
+go_parent :: (app: *App) {
+    tab := current_tab(app);
+    if tab.path == "/" return;
+    child := tprint("{}", base_name(tab.path));
+    parent := tprint("{}", parent_path(tab.path));
+    change_dir(app, parent, child);
+}
+
+switch_tab :: (app: *App, index: ssize) {
+    if index == app.current return;
+    if !app.tabs[index].used {
+        source := current_tab(app);
+        tab := &app.tabs[index];
+        tab.used = true;
+        tab.path = source.path.clone();
+        tab.hidden = source.hidden;
+        tab.sort = source.sort;
+    }
+    app.current = index;
+    focus := "";
+    load_current(app, focus);
+}
+
+// ---------------------------------------------------------------------------
+// Selection.
+
+selection_index :: (app: *App, path: str) -> ssize {
+    for p, i: app.selection if p == path return i;
+    return -1;
+}
+
+toggle_selection :: (app: *App, e: *Entry) {
+    i := selection_index(app, e.path);
+    if i >= 0 {
+        removed := app.selection.swap_remove(i);
+        removed.free();
+    } else {
+        app.selection.push(e.path.clone());
+    }
+}
+
+clear_selection :: (app: *App) {
+    for p: app.selection p.free();
+    app.selection.clear();
+}
+
+// ---------------------------------------------------------------------------
+// Keys.
+
+is_char :: (key: Terminal_Key, c: u8) -> bool {
+    return key.code == .Character && !key.ctrl && !key.alt && key.rune == cast(u32) c;
+}
+
+is_ctrl :: (key: Terminal_Key, c: u8) -> bool {
+    return key.code == .Character && key.ctrl && key.rune == cast(u32) c;
+}
+
+handle_key :: (app: *App, key: Terminal_Key, canvas: *Terminal_Canvas) {
+    if key.pasted && app.mode != .Filter && app.mode != .Prompt return;
+    if app.mode == {
+        case .Help, .Info;
+            app.mode = .Normal;
+            return;
+        case .Sort_Menu;
+            handle_sort_key(app, key);
+            return;
+        case .Confirm;
+            handle_confirm_key(app, key);
+            return;
+        case .Filter;
+            handle_filter_key(app, key);
+            return;
+        case .Prompt;
+            handle_prompt_key(app, key);
+            return;
+        case .Normal;
+    }
+    free_string(&app.message);
+    tab := current_tab(app);
+    page := app.list_rows.max(1);
+    count := app.view.count;
+
+    if key.code == {
+        case .Up; move_cursor(app, -1); return;
+        case .Down; move_cursor(app, 1); return;
+        case .Page_Up; move_cursor(app, -page); return;
+        case .Page_Down; move_cursor(app, page); return;
+        case .Home; tab.cursor = 0; return;
+        case .End; tab.cursor = count - 1; clamp_cursor(app); return;
+        case .Left, .Backspace; go_parent(app); return;
+        case .Right, .Enter; open_current(app); return;
+        case .Tab;
+            step := ifx key.shift CONTEXTS - 1 else 1;
+            switch_tab(app, (app.current + step) % CONTEXTS);
+            return;
+        case .Escape;
+            if tab.filter.count > 0 {
+                free_string(&tab.filter);
+                rebuild_view(app);
+                clamp_cursor(app);
+            }
+            return;
+        case .F5; reload_keep_cursor(app); return;
+        else;
+    }
+    if key.code != .Character return;
+    if key.ctrl {
+        if key.rune > 127 return;
+        if cast(u8) key.rune == {
+            case #char "n"; move_cursor(app, 1);
+            case #char "p"; move_cursor(app, -1);
+            case #char "d"; move_cursor(app, page / 2);
+            case #char "u"; move_cursor(app, -(page / 2));
+            case #char "l"; reload_keep_cursor(app);
+            case #char "c", #char "q"; app.quit = true;
+            else;
+        }
+        return;
+    }
+    if key.alt return;
+    if key.rune > 127 return;
+    c := cast(u8) key.rune;
+    if c == {
+        case #char "j"; move_cursor(app, 1);
+        case #char "k"; move_cursor(app, -1);
+        case #char "h"; go_parent(app);
+        case #char "l"; open_current(app);
+        case #char "g"; tab.cursor = 0;
+        case #char "G"; tab.cursor = count - 1; clamp_cursor(app);
+        case #char "q"; app.quit = true; app.write_cd = true;
+        case #char "Q"; app.quit = true;
+        case #char "~"; if app.home.count > 0 change_dir(app, app.home);
+        case #char "`"; change_dir(app, "/");
+        case #char "@"; change_dir(app, app.start_dir);
+        case #char "-";
+            if tab.previous.count > 0 {
+                target := tprint("{}", tab.previous);
+                change_dir(app, target);
+            }
+        case #char "1", #char "2", #char "3", #char "4";
+            switch_tab(app, cast(ssize) (c - #char "1"));
+        case #char "/";
+            app.mode = .Filter;
+            app.input.set_text(tab.filter);
+        case #char ".";
+            tab.hidden = !tab.hidden;
+            set_message(app, ifx tab.hidden "showing hidden files" else "hiding hidden files");
+            reload_keep_cursor(app);
+        case #char "d"; app.detail = !app.detail;
+        case #char "P"; app.preview_on = !app.preview_on;
+        case #char "I"; app.icons = !app.icons;
+        case #char "t"; app.mode = .Sort_Menu;
+        case #char "?"; app.mode = .Help;
+        case #char "i"; if count > 0 app.mode = .Info;
+        case #char " ", #char "+";
+            if #pattern ?e = current_entry(app) {
+                toggle_selection(app, e);
+                move_cursor(app, 1);
+            }
+        case #char "a";
+            for index: app.view {
+                e := &app.entries[index];
+                if selection_index(app, e.path) < 0 app.selection.push(e.path.clone());
+            }
+            set_message(app, tprint("{} selected", app.selection.count));
+        case #char "A";
+            for index: app.view toggle_selection(app, &app.entries[index]);
+            set_message(app, tprint("{} selected", app.selection.count));
+        case #char "u";
+            clear_selection(app);
+            set_message(app, "selection cleared");
+        case #char "p"; paste_selection(app, false);
+        case #char "v"; paste_selection(app, true);
+        case #char "x";
+            if app.selection.count > 0 || count > 0 {
+                app.mode = .Confirm;
+                app.confirm = .Delete;
+            }
+        case #char "r";
+            if #pattern ?e = current_entry(app) start_prompt(app, .Rename, e.name);
+        case #char "n"; start_prompt(app, .Create, "");
+        case #char "c"; start_prompt(app, .Change_Dir, "");
+        case #char "o"; if count > 0 start_prompt(app, .Open_With, "");
+        case #char "e";
+            if #pattern ?e = current_entry(app) {
+                editor := environment_get_or("VISUAL", "").unwrap_or("".clone());
+                if editor.count == 0 {
+                    editor.free();
+                    editor = environment_get_or("EDITOR", "vi").unwrap_or("vi".clone());
+                }
+                defer editor.free();
+                run_external(app, tprint("{} {}", editor, shell_quote(e.path)), false);
+            }
+        case #char "!";
+            shell := environment_get_or("SHELL", "/bin/sh").unwrap_or("/bin/sh".clone());
+            defer shell.free();
+            run_external(app, shell_quote(shell), false);
+        else;
+    }
+}
+
+move_cursor :: (app: *App, delta: ssize) {
+    tab := current_tab(app);
+    tab.cursor += delta;
+    clamp_cursor(app);
+}
+
+open_current :: (app: *App) {
+    #pattern ?e := current_entry(app) else { return; };
+    if e.is_dir {
+        path := tprint("{}", e.path);
+        change_dir(app, path);
+        return;
+    }
+    opener := environment_get_or("FLS_OPENER", "").unwrap_or("".clone());
+    if opener.count == 0 {
+        opener.free();
+        opener = environment_get_or("NNN_OPENER", "").unwrap_or("".clone());
+    }
+    if opener.count == 0 {
+        opener.free();
+        opener = "xdg-open".clone();
+    }
+    defer opener.free();
+    // A graphical opener detaches; a terminal program takes the screen.
+    run_external(app, tprint("{} {}", opener, shell_quote(e.path)), opener == "xdg-open" || opener == "open");
+}
+
+/// Wraps text in single quotes for /bin/sh.
+shell_quote :: (text: str) -> str {
+    b: String_Builder;
+    b.allocator = context.temp_allocator;
+    b.write_byte(#char "'");
+    for i: 0..text.count {
+        if text[i] == #char "'" b.write_string("'\\''");
+        else b.write_byte(text[i]);
+    }
+    b.write_byte(#char "'");
+    return b.to_string();
+}
+
+/// Runs a shell command line in the current directory. A foreground program
+/// gets the terminal: the session is suspended and restored around it.
+run_external :: (app: *App, line: str, background: bool) {
+    tab := current_tab(app);
+    if !app.have_session {
+        set_message(app, tprint("would run: {}", line));
+        return;
+    }
+    if background {
+        full := tprint("{} >/dev/null 2>&1 &", line);
+        _ := run_shell_command(full, tab.path);
+        set_message(app, tprint("opened with: {}", line));
+        return;
+    }
+    end_session(app);
+    result := run_shell_command(line, tab.path);
+    if !begin_session(app) {
+        app.quit = true;
+        return;
+    }
+    if result == {
+        case .Ok(done);
+            if !done.status.exited || done.status.code != 0
+                set_message(app, tprint("exited with status {}", done.status.code), true);
+        case .Err;
+            set_message(app, tprint("could not run: {}", line), true);
+    }
+    reload_keep_cursor(app);
+}
+
+// ---------------------------------------------------------------------------
+// Modes.
+
+handle_sort_key :: (app: *App, key: Terminal_Key) {
+    app.mode = .Normal;
+    tab := current_tab(app);
+    if key.code != .Character || key.ctrl || key.rune > 127 return;
+    if cast(u8) key.rune == {
+        case #char "n"; tab.sort.field = .Name;
+        case #char "N"; tab.sort.field = .Name_Case;
+        case #char "s"; tab.sort.field = .Size;
+        case #char "t", #char "m"; tab.sort.field = .Modified;
+        case #char "a"; tab.sort.field = .Accessed;
+        case #char "e"; tab.sort.field = .Extension;
+        case #char "y"; tab.sort.field = .Type;
+        case #char "r"; tab.sort.reverse = !tab.sort.reverse;
+        case #char "d";
+            tab.sort.grouping = ifx tab.sort.grouping == .None Dir_Grouping.First else Dir_Grouping.None;
+        case #char "c"; tab.sort = .{ .grouping = .First };
+        else; return;
+    }
+    set_message(app, tprint("sort: {}{}", tab.sort.field, ifx tab.sort.reverse " (reversed)" else ""));
+    reload_keep_cursor(app);
+}
+
+handle_confirm_key :: (app: *App, key: Terminal_Key) {
+    app.mode = .Normal;
+    if !is_char(key, #char "y") && !is_char(key, #char "Y") {
+        set_message(app, "cancelled");
+        return;
+    }
+    if app.confirm == .Delete delete_targets(app);
+    app.confirm = .None;
+}
+
+handle_filter_key :: (app: *App, key: Terminal_Key) {
+    tab := current_tab(app);
+    if key.code == .Escape {
+        app.mode = .Normal;
+        free_string(&tab.filter);
+        rebuild_view(app);
+        clamp_cursor(app);
+        return;
+    }
+    if key.code == .Enter || is_ctrl(key, #char "j") {
+        app.mode = .Normal;
+        // With a single match, Enter opens it (nnn's type-to-nav).
+        if app.view.count == 1 {
+            tab.cursor = 0;
+            open_current(app);
+        }
+        return;
+    }
+    if key.code == .Up || key.code == .Down {
+        step: ssize = 1;
+        if key.code == .Up step = -1;
+        move_cursor(app, step);
+        return;
+    }
+    if app.input.handle_key(key) {
+        set_string(&tab.filter, app.input.text());
+        rebuild_view(app);
+        tab.cursor = 0;
+        tab.scroll = 0;
+        clamp_cursor(app);
+    }
+}
+
+start_prompt :: (app: *App, kind: Prompt_Kind, initial: str) {
+    app.mode = .Prompt;
+    app.prompt = kind;
+    app.input.set_text(initial);
+    if kind == .Rename {
+        // Put the cursor before the extension, as editors usually do.
+        dot := initial.count;
+        while dot > 1 && initial[dot - 1] != #char "." dot -= 1;
+        if dot > 1 {
+            scalars: ssize = 0;
+            for r: initial[0..dot - 1] scalars += 1;
+            app.input.cursor = scalars;
+        }
+    }
+}
+
+prompt_label :: (kind: Prompt_Kind) -> str {
+    if kind == {
+        case .Rename; return "rename: ";
+        case .Create; return "new (end with / for a directory): ";
+        case .Change_Dir; return "cd: ";
+        case .Open_With; return "open with: ";
+        case .None; return "";
+    }
+}
+
+handle_prompt_key :: (app: *App, key: Terminal_Key) {
+    if key.code == .Escape || is_ctrl(key, #char "c") {
+        app.mode = .Normal;
+        app.prompt = .None;
+        return;
+    }
+    if key.code == .Enter || is_ctrl(key, #char "j") {
+        text := tprint("{}", app.input.text().trim());
+        kind := app.prompt;
+        app.mode = .Normal;
+        app.prompt = .None;
+        if text.count == 0 return;
+        submit_prompt(app, kind, text);
+        return;
+    }
+    app.input.handle_key(key);
+}
+
+submit_prompt :: (app: *App, kind: Prompt_Kind, text: str) {
+    tab := current_tab(app);
+    if kind == {
+        case .Rename;
+            #pattern ?e := current_entry(app) else { return; };
+            if text.contains("/") {
+                set_message(app, "a name cannot contain '/'", true);
+                return;
+            }
+            target := tprint("{}/{}", tab.path, text);
+            if exists(target).unwrap_or(false) {
+                set_message(app, tprint("{} already exists", text), true);
+                return;
+            }
+            if rename(e.path, target, false) == {
+                case .Ok;
+                    set_message(app, tprint("renamed to {}", text));
+                    load_current(app, text);
+                case .Err(error);
+                    set_message(app, tprint("rename failed: {}", os_error_text(error.os_code)), true);
+            }
+        case .Create;
+            directory := text[text.count - 1] == #char "/";
+            name := text.trim_end_matches("/");
+            target := tprint("{}/{}", tab.path, name);
+            if exists(target).unwrap_or(false) {
+                set_message(app, tprint("{} already exists", name), true);
+                return;
+            }
+            ok := true;
+            if directory {
+                if create_directory(target, .Default_Directory, true) == {
+                    case .Err(error); ok = false; set_message(app, tprint("mkdir failed: {}", os_error_text(error.os_code)), true);
+                    else;
+                }
+            } else {
+                parent := parent_path(target);
+                _ := create_directory(parent, .Default_Directory, true);
+                if write_file(target, "") == {
+                    case .Err(error); ok = false; set_message(app, tprint("create failed: {}", os_error_text(error.os_code)), true);
+                    else;
+                }
+            }
+            if ok {
+                set_message(app, tprint("created {}", text));
+                first := name;
+                if #pattern ?split = name.split_once("/") first = split.before;
+                load_current(app, first);
+            }
+        case .Change_Dir;
+            path := text;
+            if path == "~" || path.starts_with("~/") path = tprint("{}{}", app.home, path[1..path.count]);
+            else if path[0] != #char "/" path = tprint("{}/{}", tab.path, path);
+            change_dir(app, path);
+        case .Open_With;
+            #pattern ?e := current_entry(app) else { return; };
+            run_external(app, tprint("{} {}", text, shell_quote(e.path)), false);
+        case .None;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// File operations.
+
+/// Copies (or moves) the selection into the current directory.
+paste_selection :: (app: *App, move: bool) {
+    if app.selection.count == 0 {
+        set_message(app, "nothing selected (space selects)", true);
+        return;
+    }
+    tab := current_tab(app);
+    done := 0;
+    failed := 0;
+    last_error := "";
+    for source: app.selection {
+        name := base_name(source);
+        target := tprint("{}/{}", tab.path, name);
+        if target == source { failed += 1; last_error = "source and destination are the same"; continue; }
+        if exists(target).unwrap_or(false) || is_symlink(target).unwrap_or(false) {
+            failed += 1;
+            last_error = tprint("{} already exists", name);
+            continue;
+        }
+        error_code: s64 = 0;
+        ok := false;
+        if move {
+            if rename(source, target, false) == {
+                case .Ok; ok = true;
+                case .Err(error);
+                    if error.kind == .Cross_Device {
+                        ok = copy_path(source, target, &error_code);
+                        if ok _ := remove_all(source);
+                    } else error_code = error.os_code;
+            }
+        } else {
+            ok = copy_path(source, target, &error_code);
+        }
+        if ok done += 1;
+        else {
+            failed += 1;
+            last_error = tprint("{}: {}", name, os_error_text(error_code));
+        }
+    }
+    verb := ifx move "moved" else "copied";
+    if failed == 0 set_message(app, tprint("{} {} item(s)", verb, done));
+    else set_message(app, tprint("{} {}, {} failed ({})", verb, done, failed, last_error), true);
+    if done > 0 && move clear_selection(app);
+    reload_keep_cursor(app);
+}
+
+copy_path :: (source: str, target: str, code: *s64) -> bool {
+    if is_directory(source).unwrap_or(false) && !is_symlink(source).unwrap_or(false) {
+        if copy_tree(source, target, .Fail_If_Exists, Copy_Flags.Default | .Recursive | .Preserve_Links) == {
+            case .Ok; return true;
+            case .Err(error); code.* = error.os_code; return false;
+        }
+    }
+    if copy_file(source, target, .Fail_If_Exists, Copy_Flags.Default | .Preserve_Links) == {
+        case .Ok; return true;
+        case .Err(error); code.* = error.os_code; return false;
+    }
+}
+
+delete_targets :: (app: *App) {
+    targets: [..]str;
+    defer targets.free();
+    if app.selection.count > 0 {
+        for p: app.selection targets.push(p);
+    } else if #pattern ?e = current_entry(app) {
+        targets.push(e.path);
+    }
+    done := 0;
+    failed := 0;
+    last_error := "";
+    for path: targets {
+        dir := is_directory(path).unwrap_or(false) && !is_symlink(path).unwrap_or(false);
+        if dir {
+            if remove_all(path) == {
+                case .Ok; done += 1;
+                case .Err(error); failed += 1; last_error = tprint("{}: {}", base_name(path), os_error_text(error.os_code));
+            }
+        } else {
+            if remove(path) == {
+                case .Ok; done += 1;
+                case .Err(error); failed += 1; last_error = tprint("{}: {}", base_name(path), os_error_text(error.os_code));
+            }
+        }
+    }
+    if failed == 0 set_message(app, tprint("deleted {} item(s)", done));
+    else set_message(app, tprint("deleted {}, {} failed ({})", done, failed, last_error), true);
+    clear_selection(app);
+    reload_keep_cursor(app);
+}
+
+// ---------------------------------------------------------------------------
+// Mouse.
+
+now_ms :: () -> s64 {
+    stamp := unix_now().unwrap_or(.{});
+    return stamp.seconds * 1000 + cast(s64) (stamp.nanosecond / 1_000_000);
+}
+
+handle_mouse :: (app: *App, mouse: Terminal_Mouse_Event, canvas: *Terminal_Canvas) -> bool {
+    if app.mode != .Normal {
+        if mouse.pressed && !mouse.moved && (app.mode == .Help || app.mode == .Info) {
+            app.mode = .Normal;
+            return true;
+        }
+        return false;
+    }
+    tab := current_tab(app);
+    if mouse.button == .Wheel_Up { move_cursor(app, -3); return true; }
+    if mouse.button == .Wheel_Down { move_cursor(app, 3); return true; }
+    if !mouse.pressed || mouse.moved return false;
+    // The tab bar: " 1  2  3  4 " from column 1 of the first row.
+    if mouse.y == 0 {
+        slot := cast(ssize) (mouse.x - 1) / 3;
+        if slot >= 0 && slot < CONTEXTS { switch_tab(app, slot); return true; }
+        return false;
+    }
+    row := cast(ssize) mouse.y - 1;
+    if row < 0 || row >= app.list_rows return false;
+    index := tab.scroll + row;
+    if index >= app.view.count return false;
+    if mouse.button == .Right {
+        tab.cursor = index;
+        toggle_selection(app, &app.entries[app.view[index]]);
+        return true;
+    }
+    if mouse.button != .Left return false;
+    now := now_ms();
+    double := mouse.double_click || (index == app.last_click_row && now - app.last_click_ms < 400);
+    tab.cursor = index;
+    app.last_click_ms = now;
+    app.last_click_row = index;
+    if double {
+        app.last_click_row = -1;
+        open_current(app);
+    }
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// Drawing.
+
+/// Draws the whole interface. Returns where the text caret belongs, or
+/// x = -1 when it should be hidden.
+render :: (app: *App, canvas: *Terminal_Canvas) -> Terminal_Point {
+    canvas.clear();
+    caret := Terminal_Point.{ -1, -1 };
+    w := canvas.width;
+    h := canvas.height;
+    draw_header(app, canvas);
+    list_top: ssize = 1;
+    list_height := (h - 2).max(1);
+    app.list_rows = list_height;
+    preview_width: ssize = 0;
+    if app.preview_on && w >= 90 preview_width = (w * 2) / 5;
+    list_width := w - preview_width;
+    draw_list(app, canvas, 0, list_top, list_width - ifx preview_width > 0 1 else 0, list_height);
+    if preview_width > 0 {
+        for y: list_top..list_top + list_height canvas.set(list_width - 1, y, 16#2502, chrome(239));
+        draw_preview(app, canvas, list_width + 1, list_top, preview_width - 2, list_height);
+    }
+    caret = draw_status(app, canvas, h - 1);
+    if app.mode == {
+        case .Help; draw_help(canvas);
+        case .Info; draw_info(app, canvas);
+        case .Sort_Menu; draw_sort_menu(app, canvas);
+        else;
+    }
+    return caret;
+}
+
+display_path :: (app: *App, path: str) -> str {
+    if app.home.count > 1 && path.starts_with(app.home) {
+        rest := path[app.home.count..path.count];
+        if rest.count == 0 return "~";
+        if rest[0] == #char "/" return tprint("~{}", rest);
+    }
+    return path;
+}
+
+draw_header :: (app: *App, canvas: *Terminal_Canvas) {
+    bg := bar_bg();
+    canvas.fill(0, 0, canvas.width, 1, 32, chrome(250, bg));
+    for i: 0..CONTEXTS {
+        label := tprint(" {} ", i + 1);
+        style := chrome(244, bg);
+        if app.tabs[i].used style = chrome(252, bg, .Bold);
+        if i == app.current style = chrome(231, Terminal_Color.terminal_color_indexed(25), .Bold);
+        canvas.text(1 + i * 3, 0, label, style);
+    }
+    tab := current_tab(app);
+    path := display_path(app, tab.path);
+    right := "";
+    if app.selection.count > 0 right = tprint(" {} selected ", app.selection.count);
+    path_x: ssize = CONTEXTS * 3 + 2;
+    room := canvas.width - path_x - text_width(right) - 1;
+    canvas.text(path_x, 0, fit_path(path, room), chrome(117, bg, .Bold));
+    if right.count > 0 {
+        canvas.text(canvas.width - text_width(right), 0, right, chrome(16, Terminal_Color.terminal_color_indexed(149), .Bold));
+    }
+}
+
+/// Shortens a path from the left: "…/deep/directory".
+fit_path :: (path: str, width: ssize) -> str {
+    if width <= 0 return "";
+    if text_width(path) <= width return path;
+    i: ssize = 0;
+    while i < path.count && text_width(path[i..path.count]) > width - 1 {
+        _, n := decode_utf8(path, i);
+        i += n;
+    }
+    return tprint("…{}", path[i..path.count]);
+}
+
+draw_list :: (app: *App, canvas: *Terminal_Canvas, x0: ssize, y0: ssize, width: ssize, height: ssize) {
+    tab := current_tab(app);
+    if app.load_error.count > 0 {
+        canvas.text(x0 + 2, y0 + 1, fit_width(app.load_error, width - 3), chrome(203));
+        return;
+    }
+    if app.view.count == 0 {
+        message := ifx tab.filter.count > 0 "no matches" else "empty directory";
+        canvas.text(x0 + 2, y0 + 1, message, chrome(244, .{}, .Italic));
+        return;
+    }
+    // Keep the cursor inside the window with a small margin.
+    margin := (height / 6).min(3);
+    if tab.cursor < tab.scroll + margin tab.scroll = tab.cursor - margin;
+    if tab.cursor >= tab.scroll + height - margin tab.scroll = tab.cursor - height + margin + 1;
+    max_scroll := (app.view.count - height).max(0);
+    tab.scroll = tab.scroll.clamp(0, max_scroll);
+
+    detail_width: ssize = 0;
+    if app.detail detail_width = 10 + 1 + 6 + 1 + 16 + 1;
+    if width - detail_width < 16 detail_width = 0;
+
+    for row: 0..height {
+        index := tab.scroll + row;
+        if index >= app.view.count break;
+        e := &app.entries[app.view[index]];
+        y := y0 + row;
+        on_cursor := index == tab.cursor;
+        selected := selection_index(app, e.path) >= 0;
+        row_bg: Terminal_Color;
+        if on_cursor row_bg = cursor_bg();
+        if on_cursor canvas.fill(x0, y, width, 1, 32, with_background(plain(), row_bg));
+        // Selection marker.
+        if selected canvas.text(x0, y, "▌", chrome(149, row_bg, .Bold));
+        else if on_cursor canvas.text(x0, y, "▶", chrome(75, row_bg));
+        x := x0 + 2;
+        style := with_background(entry_style(e), row_bg);
+        if selected style = with_flags(style, .Bold);
+        if app.icons {
+            icon_style: Terminal_Style;
+            icon_style.foreground = style.foreground;
+            icon_style.background = row_bg;
+            canvas.text(x, y, entry_icon(e), icon_style);
+            x += 2;
+        }
+        name_room := width - (x - x0) - detail_width - 1;
+        suffix := classify_suffix(e);
+        label := tprint("{}{}", e.name, suffix);
+        if e.meta.kind == .Symlink && e.link_target.count > 0 && !app.detail {
+            label = tprint("{} -> {}", e.name, e.link_target);
+        }
+        canvas.text(x, y, fit_width(label, name_room), style);
+        if detail_width > 0 {
+            dx := x0 + width - detail_width;
+            perms := permission_text(e.meta);
+            size := ifx e.is_dir && e.meta.kind == .Directory "-" else short_size(e.meta.size);
+            when := ifx e.meta.modified.valid format_time(e.meta.modified.seconds, 0, .Long_Iso) else "-";
+            canvas.text(dx, y, perms, chrome(245, row_bg));
+            canvas.text(dx + 11 + 6 - text_width(size), y, size, with_background(size_tui_style(e), row_bg));
+            canvas.text(dx + 18, y, when, chrome(110, row_bg));
+        }
+    }
+    // A scrollbar when the list overflows.
+    if app.view.count > height && height > 2 {
+        thumb := (height * height / app.view.count).max(1);
+        top := tab.scroll * (height - thumb) / max_scroll.max(1);
+        for i: 0..height {
+            glyph: u32 = ifx i >= top && i < top + thumb 16#2588 else 16#2591;
+            canvas.set(x0 + width - 1, y0 + i, glyph, chrome(ifx i >= top && i < top + thumb 245 else 236));
+        }
+    }
+}
+
+size_tui_style :: (e: *const Entry) -> Terminal_Style {
+    if e.meta.kind == .Directory return chrome(240);
+    size := e.meta.size;
+    if size < 1_000_000 return ansi(2);
+    if size < 1_000_000_000 return ansi(3);
+    return ansi(1);
+}
+
+permission_text :: (m: Metadata) -> str {
+    p := cast(u32) m.permissions;
+    t := ".";
+    if m.kind == {
+        case .Directory; t = "d";
+        case .Symlink; t = "l";
+        case .Fifo; t = "|";
+        case .Socket; t = "s";
+        case .Block_Device; t = "b";
+        case .Character_Device; t = "c";
+        else;
+    }
+    bits := "rwxrwxrwx";
+    b: String_Builder;
+    b.allocator = context.temp_allocator;
+    b.write_string(t);
+    for i: 0..9 {
+        on := (p & (cast(u32) 1 << cast(u32) (8 - i))) != 0;
+        b.write_byte(ifx on bits[i] else #char "-");
+    }
+    return b.to_string();
+}
+
+draw_status :: (app: *App, canvas: *Terminal_Canvas, y: ssize) -> Terminal_Point {
+    bg := Terminal_Color.terminal_color_indexed(235);
+    canvas.fill(0, y, canvas.width, 1, 32, chrome(250, bg));
+    tab := current_tab(app);
+    if app.mode == .Filter || app.mode == .Prompt {
+        label := ifx app.mode == .Filter "/" else prompt_label(app.prompt);
+        canvas.text(1, y, label, chrome(214, bg, .Bold));
+        x := 1 + text_width(label);
+        caret := app.input.draw(canvas, x, y, (canvas.width - x - 1).max(2), 1, chrome(231, bg));
+        if app.mode == .Filter {
+            count := tprint(" {} match{} ", app.view.count, ifx app.view.count == 1 "" else "es");
+            canvas.text(canvas.width - text_width(count), y, count, chrome(244, bg));
+        }
+        return caret;
+    }
+    if app.mode == .Confirm {
+        count := ifx app.selection.count > 0 app.selection.count else 1;
+        what := tprint("delete {} selected item(s)? [y/N]", count);
+        if app.selection.count == 0 {
+            if #pattern ?e = current_entry(app) what = tprint("delete '{}'? [y/N]", e.name);
+        }
+        canvas.text(1, y, fit_width(what, canvas.width - 2), chrome(231, Terminal_Color.terminal_color_indexed(124), .Bold));
+        return .{ -1, -1 };
+    }
+    if app.message.count > 0 {
+        style := ifx app.message_error chrome(203, bg, .Bold) else chrome(150, bg);
+        canvas.text(1, y, fit_width(app.message, canvas.width - 2), style);
+        return .{ -1, -1 };
+    }
+    position := tprint(" {}/{} ", ifx app.view.count > 0 tab.cursor + 1 else 0, app.view.count);
+    canvas.text(0, y, position, chrome(16, Terminal_Color.terminal_color_indexed(110), .Bold));
+    x := text_width(position) + 1;
+    if #pattern ?e = current_entry(app) {
+        m := e.meta;
+        info := tprint("{}  {}  {}:{}  {}",
+            permission_text(m),
+            ifx m.kind == .Directory "-" else short_size(m.size),
+            user_name(m.owner), group_name(m.group),
+            ifx m.modified.valid format_time(m.modified.seconds, 0, .Long_Iso) else "-");
+        canvas.text(x, y, info, chrome(250, bg));
+        x += text_width(info) + 2;
+        if e.meta.kind == .Symlink {
+            canvas.text(x, y, fit_width(tprint("-> {}", e.link_target), canvas.width - x - 1), chrome(117, bg));
+        }
+    }
+    hints := tprint(" {}{}{} ? help ",
+        ifx tab.hidden ". " else "",
+        ifx tab.filter.count > 0 tprint("/{} ", tab.filter) else "",
+        sort_label(tab.sort));
+    hx := canvas.width - text_width(hints);
+    if hx > x canvas.text(hx, y, hints, chrome(244, bg));
+    return .{ -1, -1 };
+}
+
+sort_label :: (sort: Sort_Options) -> str {
+    name := "name";
+    if sort.field == {
+        case .Name, .Name_Case; name = "name";
+        case .Size; name = "size";
+        case .Modified; name = "time";
+        case .Accessed; name = "atime";
+        case .Extension, .Extension_Case; name = "ext";
+        case .Type; name = "type";
+        else; name = "other";
+    }
+    return tprint("{}{}", ifx sort.reverse "↓" else "↑", name);
+}
+
+// ---------------------------------------------------------------------------
+// Preview pane.
+
+draw_preview :: (app: *App, canvas: *Terminal_Canvas, x0: ssize, y0: ssize, width: ssize, height: ssize) {
+    if width < 8 return;
+    #pattern ?e := current_entry(app) else { return; };
+    load_preview(app, e);
+    p := &app.preview;
+    title := tprint(" {} ", e.name);
+    canvas.text(x0, y0, fit_width(title, width), with_flags(entry_style(e), .Bold));
+    y := y0 + 1;
+    if p.message.count > 0 {
+        canvas.text(x0 + 1, y + 1, fit_width(p.message, width - 2), chrome(244, .{}, .Italic));
+        return;
+    }
+    if p.is_dir {
+        if p.entries.count == 0 {
+            canvas.text(x0 + 1, y + 1, "empty directory", chrome(244, .{}, .Italic));
+            return;
+        }
+        for *child, i: p.entries {
+            if y + i >= y0 + height break;
+            x := x0 + 1;
+            style := entry_style(child);
+            if app.icons {
+                icon_style: Terminal_Style;
+                icon_style.foreground = style.foreground;
+                canvas.text(x, y + i, entry_icon(child), icon_style);
+                x += 2;
+            }
+            canvas.text(x, y + i, fit_width(tprint("{}{}", child.name, classify_suffix(child)), width - (x - x0)), style);
+        }
+        if p.entries.count > height - 1 {
+            more := tprint("… {} more", p.entries.count - (height - 1));
+            canvas.text(x0 + width - text_width(more), y0 + height - 1, more, chrome(244));
+        }
+        return;
+    }
+    gutter := 5;
+    for line, i: p.lines {
+        if y + i >= y0 + height break;
+        number := tprint("{}", i + 1);
+        canvas.text(x0 + gutter - 1 - text_width(number), y + i, number, chrome(239));
+        canvas.text(x0 + gutter, y + i, fit_width(line, width - gutter), chrome(252));
+    }
+}
+
+/// Fills `app.preview` for `e` unless it already describes it.
+load_preview :: (app: *App, e: *Entry) {
+    p := &app.preview;
+    stamp := e.meta.modified.seconds * 1_000_000_000 + cast(s64) e.meta.modified.nanoseconds;
+    if p.path.count > 0 && p.path == e.path && p.modified == stamp return;
+    free(p);
+    p.* = .{};
+    p.path = e.path.clone();
+    p.modified = stamp;
+    if !e.stat_ok {
+        p.message = "cannot read file information".clone();
+        return;
+    }
+    if e.is_dir {
+        p.is_dir = true;
+        filter: Filter_Options;
+        filter.all = ifx current_tab(app).hidden 1 else 0;
+        if load_directory(e.path, &filter) == {
+            case .Ok(list);
+                p.entries = list;
+                sort_entries(p.entries[..], current_tab(app).sort);
+            case .Err(error);
+                p.message = tprint("{}", os_error_text(error.os_code)).clone();
+        }
+        return;
+    }
+    if e.meta.kind == .Symlink && !e.target_ok {
+        p.message = tprint("broken link to {}", e.link_target).clone();
+        return;
+    }
+    kind := ifx e.target_ok e.target_meta.kind else e.meta.kind;
+    if kind != .Regular {
+        p.message = tprint("{} file", kind).clone();
+        return;
+    }
+    if read_file_up_to(e.path, 16384) == {
+        case .Err(error);
+            p.message = tprint("{}", os_error_text(error.os_code)).clone();
+        case .Ok(text);
+            defer text.free();
+            binary := false;
+            for i: 0..text.count.min(4096) if text[i] == 0 { binary = true; break; }
+            // A read cut mid-character leaves at most three stray bytes.
+            bad := text.bytes().utf8_invalid_index();
+            if binary || (bad >= 0 && bad < text.count - 3) {
+                size_number, size_unit := human_size(e.meta.size, .Binary);
+                p.message = tprint("binary data, {}{}B", size_number, size_unit).clone();
+                return;
+            }
+            if text.count == 0 {
+                p.message = "empty file".clone();
+                return;
+            }
+            start: ssize = 0;
+            while start < text.count && p.lines.count < 400 {
+                end := start;
+                while end < text.count && text[end] != 10 end += 1;
+                p.lines.push(clean_line(text[start..end]));
+                start = end + 1;
+            }
+    }
+}
+
+/// Expands tabs and drops control characters so a line draws cleanly.
+clean_line :: (line: str) -> str {
+    b: String_Builder;
+    column := 0;
+    for i: 0..line.count {
+        c := line[i];
+        if c == 9 {
+            spaces := 4 - column % 4;
+            b.write_repeated_byte(#char " ", spaces);
+            column += spaces;
+            continue;
+        }
+        if c < 32 || c == 127 continue;
+        b.write_byte(c);
+        if (c & 16#c0) != 16#80 column += 1;
+    }
+    return b.into_string();
+}
+
+// ---------------------------------------------------------------------------
+// Overlays.
+
+Box :: struct { x: ssize; y: ssize; w: ssize; h: ssize; }
+
+draw_box :: (canvas: *Terminal_Canvas, width: ssize, height: ssize, title: str) -> Box {
+    w := width.min(canvas.width - 2);
+    h := height.min(canvas.height - 2);
+    x := (canvas.width - w) / 2;
+    y := (canvas.height - h) / 2;
+    bg := Terminal_Color.terminal_color_indexed(234);
+    border := chrome(67, bg);
+    canvas.fill(x, y, w, h, 32, chrome(252, bg));
+    for i: x + 1..x + w - 1 {
+        canvas.set(i, y, 16#2500, border);
+        canvas.set(i, y + h - 1, 16#2500, border);
+    }
+    for j: y + 1..y + h - 1 {
+        canvas.set(x, j, 16#2502, border);
+        canvas.set(x + w - 1, j, 16#2502, border);
+    }
+    canvas.set(x, y, 16#256d, border);
+    canvas.set(x + w - 1, y, 16#256e, border);
+    canvas.set(x, y + h - 1, 16#2570, border);
+    canvas.set(x + w - 1, y + h - 1, 16#256f, border);
+    canvas.text(x + 2, y, tprint(" {} ", title), chrome(117, bg, .Bold));
+    return .{ x, y, w, h };
+}
+
+HELP_LINES: []str = .[
+    "NAVIGATION",
+    "  j k ↑ ↓        move          g G Home End   first / last",
+    "  h ← Backspace  parent        l → Enter      open",
+    "  PgUp PgDn ^U ^D  page        ~ ` @ -        home, /, start, previous",
+    "  1-4 Tab        contexts      c              cd to a path",
+    "  /              filter (Enter with one match opens it, Esc clears)",
+    "VIEW",
+    "  .  hidden files   d  details   P  preview   I  icons   t  sort menu",
+    "  i  file info      ^L F5  refresh",
+    "SELECTION AND FILES",
+    "  Space +  select   a  select all   A  invert   u  clear selection",
+    "  p  copy selection here      v  move selection here",
+    "  x  delete (selection or current)      r  rename      n  new file/dir/",
+    "  e  edit in $EDITOR   o  open with...   !  shell here",
+    "  q  quit (writes --cd-file)   Q  quit without writing   ? help",
+    "MOUSE",
+    "  click selects, double-click opens, right-click marks, wheel scrolls",
+];
+
+draw_help :: (canvas: *Terminal_Canvas) {
+    box := draw_box(canvas, 76, HELP_LINES.count + 4, "fls · keys");
+    bg := Terminal_Color.terminal_color_indexed(234);
+    for line, i: HELP_LINES {
+        heading := line.count > 0 && line[0] != #char " ";
+        style := ifx heading chrome(214, bg, .Bold) else chrome(252, bg);
+        canvas.text(box.x + 2, box.y + 2 + i, fit_width(line, box.w - 4), style);
+    }
+}
+
+draw_sort_menu :: (app: *App, canvas: *Terminal_Canvas) {
+    lines: [_]str = .[
+        "n  name (natural)      N  name, case-sensitive",
+        "s  size                t  modification time",
+        "a  access time         e  extension",
+        "y  type                r  reverse order",
+        "d  directories first   c  reset",
+    ];
+    box := draw_box(canvas, 50, lines.count + 4, "sort by");
+    bg := Terminal_Color.terminal_color_indexed(234);
+    for line, i: lines canvas.text(box.x + 2, box.y + 2 + i, line, chrome(252, bg));
+    _ = app;
+}
+
+draw_info :: (app: *App, canvas: *Terminal_Canvas) {
+    #pattern ?e := current_entry(app) else { return; };
+    m := e.meta;
+    rows: [..]str;
+    defer rows.free();
+    rows.push(tprint("path      {}", e.path));
+    rows.push(tprint("type      {}{}", m.kind, ifx e.meta.kind == .Symlink tprint(" -> {}{}", e.link_target, ifx e.target_ok "" else " (broken)") else ""));
+    rows.push(tprint("size      {} bytes ({})", group_digits(m.size), short_size(m.size)));
+    rows.push(tprint("on disk   {}", short_size(m.block_count * 512)));
+    rows.push(tprint("mode      {}  {}{}{}{}", permission_text(m),
+        (cast(u32) m.permissions >> 9) & 7, (cast(u32) m.permissions >> 6) & 7,
+        (cast(u32) m.permissions >> 3) & 7, cast(u32) m.permissions & 7));
+    rows.push(tprint("owner     {} ({})  group {} ({})", user_name(m.owner), m.owner, group_name(m.group), m.group));
+    rows.push(tprint("links     {}   inode {}", m.link_count, m.file_id.low));
+    for t, k: .[m.modified, m.accessed, m.changed, m.created] {
+        label := ifx k == 0 "modified" else ifx k == 1 "accessed" else ifx k == 2 "changed " else "created ";
+        value := ifx t.valid tprint("{}  ({} ago)", format_time(t.seconds, t.nanoseconds, .Full_Iso), relative_time(current_time() - t.seconds)) else "-";
+        rows.push(tprint("{}  {}", label, value));
+    }
+    box := draw_box(canvas, 78, rows.count + 4, e.name);
+    bg := Terminal_Color.terminal_color_indexed(234);
+    for line, i: rows {
+        canvas.text(box.x + 2, box.y + 2 + i, fit_width(line[0..9], 9), chrome(110, bg, .Bold));
+        canvas.text(box.x + 12, box.y + 2 + i, fit_width(line[10..line.count], box.w - 14), chrome(252, bg));
+    }
+}

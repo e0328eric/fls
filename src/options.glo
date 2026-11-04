@@ -1,0 +1,410 @@
+//! fls/src/options.glo - command-line options, parsed the way eza parses them:
+//! combinable short flags (`-laT`), `--long=value` or `--long value`, and
+//! repeatable flags such as `-aa`.
+
+#import "Io";
+#import "Format";
+#import "Strings";
+#import "util.glo";
+#import "entry.glo";
+
+#public {
+    FLS_VERSION :: "0.1.0";
+
+    View_Layout :: enum {
+        Grid;
+        Oneline;
+        Long;
+    }
+
+    When :: enum {
+        Auto;
+        Always;
+        Never;
+    }
+
+    Options :: struct {
+        layout: View_Layout = .Grid;
+        layout_forced: bool;
+        tree: bool;
+        recurse: bool;
+        across: bool;
+        level: s64 = -1;
+        classify: When = .Never;
+        color: When = .Auto;
+        icons: When = .Never;
+        hyperlink: When = .Never;
+        quotes: bool = true;
+        width: s64 = 0;
+        list_dirs: bool;
+        absolute: bool;
+
+        filter: Filter_Options;
+        sort: Sort_Options;
+
+        size_format: Size_Format = .Decimal;
+        header: bool;
+        links: bool;
+        inode: bool;
+        blocksize: bool;
+        group: bool;
+        numeric: bool;
+        octal: bool;
+        git: bool;
+        no_permissions: bool;
+        no_filesize: bool;
+        no_user: bool;
+        no_time: bool;
+        total_size: bool;
+        time_modified: bool;
+        time_accessed: bool;
+        time_created: bool;
+        time_changed: bool;
+        time_style: Time_Style = .Default;
+
+        paths: [..]str;
+
+        tui: bool;
+        cd_file: str;
+        /// Testing aids: render the browser once as text after replaying keys.
+        snapshot: bool;
+        keys: str;
+        help: bool;
+        version: bool;
+    }
+
+    free_options :: (o: *Options) {
+        o.paths.free();
+        o.filter.ignore.free();
+    }
+
+    Parse_Result :: struct {
+        ok: bool = true;
+        message: str;
+    }
+}
+
+#public {
+    usage_text :: () -> str {
+        return #string
+\\Usage: fls [OPTIONS] [PATH...]
+\\       fls --tui [OPTIONS] [DIRECTORY]
+\\
+\\A fancy ls: an eza-style listing on the command line and an nnn-style
+\\file browser in the terminal.
+\\
+\\META OPTIONS
+\\  -?, --help               show this help
+\\  -v, --version            show the version
+\\      --tui                open the interactive browser
+\\      --cd-file FILE       (tui) write the last directory to FILE on quit
+\\      --snapshot           (tui) print one frame as text instead (with -w)
+\\      --keys KEYS          (tui) replay keys first, e.g. 'jj<Enter>/src<Enter>'
+\\
+\\DISPLAY OPTIONS
+\\  -1, --oneline            one entry per line
+\\  -G, --grid               entries in a grid (default)
+\\  -l, --long               a table of details
+\\  -x, --across             sort the grid across rather than down
+\\  -R, --recurse            recurse into directories
+\\  -T, --tree               recurse into directories as a tree
+\\  -L, --level DEPTH        limit the depth of recursion
+\\  -F, --classify[=WHEN]    append a type indicator (/ * @ | =)
+\\      --color[=WHEN]       when to use colors: always, auto, never
+\\      --colour[=WHEN]      same as --color
+\\      --icons[=WHEN]       when to show Nerd Font icons: always, auto, never
+\\      --hyperlink[=WHEN]   link file names with OSC 8 hyperlinks
+\\      --no-quotes          do not quote names containing spaces
+\\      --absolute           show absolute paths
+\\  -w, --width COLS         the terminal width to fill
+\\
+\\FILTERING AND SORTING
+\\  -a, --all                show hidden files (twice: also . and ..)
+\\  -A, --almost-all         show hidden files, but not . and ..
+\\  -d, --list-dirs          list directories as files, not their contents
+\\  -D, --only-dirs          list only directories
+\\  -f, --only-files         list only files
+\\  -r, --reverse            reverse the sort order
+\\  -s, --sort FIELD         name, Name, extension, Extension, size, type,
+\\                           modified (date, time, old), newest (new),
+\\                           accessed, created, changed, inode, none
+\\  -I, --ignore-glob GLOBS  '|'-separated glob patterns to hide
+\\      --group-directories-first
+\\      --group-directories-last
+\\  -X, --dereference        follow symbolic links for file information
+\\
+\\LONG VIEW OPTIONS
+\\  -b, --binary             sizes with binary prefixes (KiB, MiB)
+\\  -B, --bytes              sizes in bytes, without prefixes
+\\  -g, --group              show the group column
+\\  -h, --header             a header row for each column
+\\  -H, --links              the number of hard links
+\\  -i, --inode              the inode number
+\\  -S, --blocksize          the allocated size on disk
+\\  -n, --numeric            numeric user and group ids
+\\  -o, --octal-permissions  permissions in octal as well
+\\  -m, --modified           the modification time (default)
+\\  -u, --accessed           the access time
+\\  -U, --created            the creation time
+\\      --changed            the status change time
+\\  -t, --time FIELD         which time to show: modified, accessed, created, changed
+\\      --time-style STYLE   default, iso, long-iso, full-iso, relative
+\\      --total-size         the recursive size of directories
+\\      --git                the git status of each file
+\\      --no-permissions     hide the permissions column
+\\      --no-filesize        hide the size column
+\\      --no-user            hide the user column
+\\      --no-time            hide the time column
+\\
+\\ENVIRONMENT
+\\  LS_COLORS, EZA_COLORS    color overrides; NO_COLOR disables automatic color
+\\  COLUMNS                  terminal width when it cannot be detected
+\\
+;
+    }
+
+    /// Parses `args` (without the program name) into `options`.
+    parse_options :: (args: []const str, options: *Options) -> Parse_Result {
+        i: ssize = 0;
+        only_paths := false;
+        while i < args.count {
+            arg := args[i];
+            i += 1;
+            if only_paths || arg.count < 2 || arg[0] != #char "-" {
+                options.paths.push(arg);
+                continue;
+            }
+            if arg == "--" {
+                only_paths = true;
+                continue;
+            }
+            if arg[1] == #char "-" {
+                name := arg[2..arg.count];
+                value := "";
+                has_value := false;
+                if #pattern ?split = name.split_once("=") {
+                    name = split.before;
+                    value = split.after;
+                    has_value = true;
+                }
+                if long_takes_value(name) && !has_value {
+                    if i >= args.count return fail(tprint("option '--{}' needs a value", name));
+                    value = args[i];
+                    i += 1;
+                    has_value = true;
+                }
+                result := apply_long(options, name, value, has_value);
+                if !result.ok return result;
+                continue;
+            }
+            // A cluster of short flags; one that takes a value ends it.
+            k: ssize = 1;
+            while k < arg.count {
+                c := arg[k];
+                k += 1;
+                if short_takes_value(c) {
+                    value := arg[k..arg.count];
+                    k = arg.count;
+                    if value.count == 0 {
+                        if i >= args.count return fail(tprint("option '-{c}' needs a value", c));
+                        value = args[i];
+                        i += 1;
+                    }
+                    result := apply_value(options, c, value);
+                    if !result.ok return result;
+                    continue;
+                }
+                result := apply_short(options, c);
+                if !result.ok return result;
+            }
+        }
+        return .{};
+    }
+}
+
+fail :: (message: str) -> Parse_Result {
+    return .{ false, message };
+}
+
+short_takes_value :: (c: u8) -> bool {
+    return c == #char "L" || c == #char "s" || c == #char "I" || c == #char "t" || c == #char "w";
+}
+
+long_takes_value :: (name: str) -> bool {
+    if name == {
+        case "level", "sort", "ignore-glob", "time", "width", "time-style", "cd-file", "keys";
+            return true;
+        else;
+            return false;
+    }
+}
+
+apply_short :: (o: *Options, c: u8) -> Parse_Result {
+    if c == {
+        case #char "1"; o.layout = .Oneline; o.layout_forced = true;
+        case #char "G"; o.layout = .Grid; o.layout_forced = true;
+        case #char "l"; o.layout = .Long;
+        case #char "x"; o.across = true;
+        case #char "R"; o.recurse = true;
+        case #char "T"; o.tree = true;
+        case #char "F"; o.classify = .Always;
+        case #char "a"; o.filter.all += 1;
+        case #char "A"; if o.filter.all == 0 o.filter.all = 1;
+        case #char "d"; o.list_dirs = true;
+        case #char "D"; o.filter.only_dirs = true;
+        case #char "f"; o.filter.only_files = true;
+        case #char "r"; o.sort.reverse = true;
+        case #char "X"; o.filter.dereference = true;
+        case #char "b"; o.size_format = .Binary;
+        case #char "B"; o.size_format = .Bytes;
+        case #char "g"; o.group = true;
+        case #char "h"; o.header = true;
+        case #char "H"; o.links = true;
+        case #char "i"; o.inode = true;
+        case #char "S"; o.blocksize = true;
+        case #char "n"; o.numeric = true;
+        case #char "o"; o.octal = true;
+        case #char "m"; o.time_modified = true;
+        case #char "u"; o.time_accessed = true;
+        case #char "U"; o.time_created = true;
+        case #char "?"; o.help = true;
+        case #char "v"; o.version = true;
+        else; return fail(tprint("unknown option '-{c}'", c));
+    }
+    return .{};
+}
+
+apply_value :: (o: *Options, c: u8, value: str) -> Parse_Result {
+    if c == {
+        case #char "L"; return apply_long(o, "level", value, true);
+        case #char "s"; return apply_long(o, "sort", value, true);
+        case #char "I"; return apply_long(o, "ignore-glob", value, true);
+        case #char "t"; return apply_long(o, "time", value, true);
+        case #char "w"; return apply_long(o, "width", value, true);
+        else; return fail(tprint("unknown option '-{c}'", c));
+    }
+}
+
+parse_when :: (value: str, has_value: bool, out: *When) -> bool {
+    if !has_value {
+        out.* = .Always;
+        return true;
+    }
+    if value == {
+        case "always", "yes", "force"; out.* = .Always;
+        case "auto", "tty", "if-tty", "automatic"; out.* = .Auto;
+        case "never", "no", "none"; out.* = .Never;
+        else; return false;
+    }
+    return true;
+}
+
+apply_long :: (o: *Options, name: str, value: str, has_value: bool) -> Parse_Result {
+    if name == {
+        case "help"; o.help = true;
+        case "version"; o.version = true;
+        case "tui"; o.tui = true;
+        case "cd-file"; o.cd_file = value;
+        case "snapshot"; o.snapshot = true;
+        case "keys"; o.keys = value;
+        case "oneline"; o.layout = .Oneline; o.layout_forced = true;
+        case "grid"; o.layout = .Grid; o.layout_forced = true;
+        case "long"; o.layout = .Long;
+        case "across"; o.across = true;
+        case "recurse"; o.recurse = true;
+        case "tree"; o.tree = true;
+        case "classify";
+            if !parse_when(value, has_value, &o.classify) return fail(tprint("bad value '{}' for --classify", value));
+        case "color", "colour";
+            if !parse_when(value, has_value, &o.color) return fail(tprint("bad value '{}' for --color", value));
+        case "icons";
+            if !has_value o.icons = .Auto;
+            else if !parse_when(value, has_value, &o.icons) return fail(tprint("bad value '{}' for --icons", value));
+        case "no-icons"; o.icons = .Never;
+        case "hyperlink";
+            if !has_value o.hyperlink = .Auto;
+            else if !parse_when(value, has_value, &o.hyperlink) return fail(tprint("bad value '{}' for --hyperlink", value));
+        case "no-quotes"; o.quotes = false;
+        case "absolute"; o.absolute = true;
+        case "all"; o.filter.all += 1;
+        case "almost-all"; if o.filter.all == 0 o.filter.all = 1;
+        case "list-dirs"; o.list_dirs = true;
+        case "only-dirs"; o.filter.only_dirs = true;
+        case "only-files"; o.filter.only_files = true;
+        case "reverse"; o.sort.reverse = true;
+        case "dereference"; o.filter.dereference = true;
+        case "group-directories-first"; o.sort.grouping = .First;
+        case "group-directories-last"; o.sort.grouping = .Last;
+        case "binary"; o.size_format = .Binary;
+        case "bytes"; o.size_format = .Bytes;
+        case "group"; o.group = true;
+        case "header"; o.header = true;
+        case "links"; o.links = true;
+        case "inode"; o.inode = true;
+        case "blocksize", "blocks"; o.blocksize = true;
+        case "numeric"; o.numeric = true;
+        case "octal-permissions", "octal"; o.octal = true;
+        case "modified"; o.time_modified = true;
+        case "accessed"; o.time_accessed = true;
+        case "created"; o.time_created = true;
+        case "changed"; o.time_changed = true;
+        case "total-size"; o.total_size = true;
+        case "git"; o.git = true;
+        case "no-git"; o.git = false;
+        case "no-permissions"; o.no_permissions = true;
+        case "no-filesize"; o.no_filesize = true;
+        case "no-user"; o.no_user = true;
+        case "no-time"; o.no_time = true;
+        case "level";
+            #pattern ?n := from_string(s64, value) else {
+                return fail(tprint("--level needs a number, not '{}'", value));
+            };
+            o.level = n;
+        case "width";
+            #pattern ?n := from_string(s64, value) else {
+                return fail(tprint("--width needs a number, not '{}'", value));
+            };
+            o.width = n;
+        case "ignore-glob";
+            parts := value.split("|");
+            defer parts.free();
+            for p: parts if p.count > 0 o.filter.ignore.push(p);
+        case "time";
+            if value == {
+                case "modified", "mod"; o.time_modified = true;
+                case "accessed", "acc"; o.time_accessed = true;
+                case "created", "cr"; o.time_created = true;
+                case "changed", "ch"; o.time_changed = true;
+                else; return fail(tprint("bad value '{}' for --time", value));
+            }
+        case "time-style";
+            if value == {
+                case "default"; o.time_style = .Default;
+                case "iso"; o.time_style = .Iso;
+                case "long-iso"; o.time_style = .Long_Iso;
+                case "full-iso"; o.time_style = .Full_Iso;
+                case "relative"; o.time_style = .Relative;
+                else; return fail(tprint("bad value '{}' for --time-style", value));
+            }
+        case "sort";
+            if value == {
+                case "name", "filename"; o.sort.field = .Name;
+                case "Name", "Filename"; o.sort.field = .Name_Case;
+                case "extension", "ext"; o.sort.field = .Extension;
+                case "Extension", "Ext"; o.sort.field = .Extension_Case;
+                case "size", "filesize"; o.sort.field = .Size;
+                case "type"; o.sort.field = .Type;
+                case "modified", "date", "time", "mod", "old", "oldest"; o.sort.field = .Modified;
+                case "newest", "new"; o.sort.field = .Modified; o.sort.reverse = !o.sort.reverse;
+                case "accessed", "acc"; o.sort.field = .Accessed;
+                case "created", "cr"; o.sort.field = .Created;
+                case "changed", "ch"; o.sort.field = .Changed;
+                case "inode"; o.sort.field = .Inode;
+                case "none"; o.sort.field = .None;
+                else; return fail(tprint("bad value '{}' for --sort", value));
+            }
+        else;
+            return fail(tprint("unknown option '--{}'", name));
+    }
+    return .{};
+}
