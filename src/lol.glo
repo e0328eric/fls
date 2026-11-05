@@ -172,7 +172,7 @@ scene_free :: (scene: *Scene) {
 /// A uniform random number in [0, 1) from the scene's generator.
 random :: (scene: *Scene) -> f64 {
     // A deterministic engine cannot fail; the error is only part of the API.
-    #pattern.Ok(value) := random_f64(.generator = scene.rng.generator()) else {
+    #pattern .Ok(value) := random_f64(.generator = scene.rng.generator()) else {
         return 0.0;
     };
     return value;
@@ -264,48 +264,48 @@ scene_step :: (scene: *Scene) {
     scene.frame += 1;
     scene.phase_frame += 1;
     if scene.phase == {
-        case .Spool;
-            // The engines wind up: the exhaust thickens until the roll.
-            ramp := cast(f64) scene.phase_frame / cast(f64) SPOOL_FRAMES;
-            if random(scene) < ramp emit_exhaust(scene, 1);
-            if scene.phase_frame >= SPOOL_FRAMES {
-                scene.phase = .Roll;
-                scene.phase_frame = 0;
-            }
-        case .Roll;
-            scene.speed += scene.accel;
-            scene.x -= scene.speed;
-            emit_exhaust(scene, 2);
-            if scene.speed > 0.5 && random(scene) < scene.speed / 3.0 emit_dust(scene);
-            if scene.x <= scene.liftoff_x {
-                scene.phase = .Climb;
-                scene.phase_frame = 0;
-                // The wheels leave the runway on this very frame.
-                scene.altitude = 1.0;
-                // Aim for the top left corner: climb just steeply enough to
-                // leave through the top as the tail clears the left edge.
-                rows := plane_top(scene) + cast(f64) PLANE_HEIGHT;
-                columns := scene.x + cast(f64) PLANE_WIDTH;
-                scene.climb_target = rows / columns;
-                if scene.climb_target < CLIMB_MIN scene.climb_target = CLIMB_MIN;
-                if scene.climb_target > CLIMB_MAX scene.climb_target = CLIMB_MAX;
-            }
-        case .Climb;
-            // Climbing, the plane gains speed only slowly.
-            scene.speed += scene.accel * 0.3;
-            scene.climb += scene.climb_target / CLIMB_FRAMES;
-            if scene.climb > scene.climb_target scene.climb = scene.climb_target;
-            scene.x -= scene.speed;
-            scene.altitude += scene.speed * scene.climb;
-            if scene.phase_frame >= GEAR_UP_FRAMES scene.gear = 0;
-            else if scene.phase_frame >= GEAR_HALF_FRAMES scene.gear = 1;
-            emit_exhaust(scene, 2);
-            if plane_gone(scene) {
-                scene.phase = .Gone;
-                scene.phase_frame = 0;
-            }
-        case .Gone;
-            if scene.phase_frame >= GONE_FRAMES && scene.puffs.count == 0 scene.done = true;
+    case .Spool;
+        // The engines wind up: the exhaust thickens until the roll.
+        ramp := cast(f64) scene.phase_frame / cast(f64) SPOOL_FRAMES;
+        if random(scene) < ramp emit_exhaust(scene, 1);
+        if scene.phase_frame >= SPOOL_FRAMES {
+            scene.phase = .Roll;
+            scene.phase_frame = 0;
+        }
+    case .Roll;
+        scene.speed += scene.accel;
+        scene.x -= scene.speed;
+        emit_exhaust(scene, 2);
+        if scene.speed > 0.5 && random(scene) < scene.speed / 3.0 emit_dust(scene);
+        if scene.x <= scene.liftoff_x {
+            scene.phase = .Climb;
+            scene.phase_frame = 0;
+            // The wheels leave the runway on this very frame.
+            scene.altitude = 1.0;
+            // Aim for the top left corner: climb just steeply enough to
+            // leave through the top as the tail clears the left edge.
+            rows := plane_top(scene) + cast(f64) PLANE_HEIGHT;
+            columns := scene.x + cast(f64) PLANE_WIDTH;
+            scene.climb_target = rows / columns;
+            if scene.climb_target < CLIMB_MIN scene.climb_target = CLIMB_MIN;
+            if scene.climb_target > CLIMB_MAX scene.climb_target = CLIMB_MAX;
+        }
+    case .Climb;
+        // Climbing, the plane gains speed only slowly.
+        scene.speed += scene.accel * 0.3;
+        scene.climb += scene.climb_target / CLIMB_FRAMES;
+        if scene.climb > scene.climb_target scene.climb = scene.climb_target;
+        scene.x -= scene.speed;
+        scene.altitude += scene.speed * scene.climb;
+        if scene.phase_frame >= GEAR_UP_FRAMES scene.gear = 0;
+        else if scene.phase_frame >= GEAR_HALF_FRAMES scene.gear = 1;
+        emit_exhaust(scene, 2);
+        if plane_gone(scene) {
+            scene.phase = .Gone;
+            scene.phase_frame = 0;
+        }
+    case .Gone;
+        if scene.phase_frame >= GONE_FRAMES && scene.puffs.count == 0 scene.done = true;
     }
     if scene.frame >= MAX_FRAMES scene.done = true;
 
@@ -472,10 +472,10 @@ ignore_signal :: (signal: s32) #c_call {}
 
 now_ms :: () -> s64 {
     if Clock.Monotonic.now() == {
-        case .Ok(instant);
-            return instant.nanoseconds / 1_000_000;
-        case .Err;
-            return 0;
+    case .Ok(instant);
+        return instant.nanoseconds / 1_000_000;
+    case .Err;
+        return 0;
     }
 }
 
@@ -499,13 +499,13 @@ wait_frame :: (session: *Terminal_Session, deadline: s64, mode: Lol_Mode) -> boo
 lol_play :: (mode: Lol_Mode) -> s32 {
     session: Terminal_Session;
     if Terminal_Session.terminal_begin(Terminal_Flags.Default) == {
-        case .Ok(begun);
-            session = begun;
-        case .Err;
-            stderr := File.stderr();
-            defer stderr.free();
-            _ := stderr.writef("fls: --lol needs an interactive terminal\n");
-            return 2;
+    case .Ok(begun);
+        session = begun;
+    case .Err;
+        stderr := File.stderr();
+        defer stderr.free();
+        _ := stderr.writef("fls: --lol needs an interactive terminal\n");
+        return 2;
     }
     defer session.free();
     defer session.end();
@@ -515,10 +515,10 @@ lol_play :: (mode: Lol_Mode) -> s32 {
     // disposition comes back once the plane is gone.
     if mode == .Trap {
         if Process_Signal.Interrupt.install_handler(ignore_signal) == {
-            case .Ok(installed);
-                defer _ = Process_Signal.Interrupt.install_handler(installed.previous);
-                return animate(&session, mode);
-            case .Err;
+        case .Ok(installed);
+            defer _ = Process_Signal.Interrupt.install_handler(installed.previous);
+            return animate(&session, mode);
+        case .Err;
         }
     }
     return animate(&session, mode);
@@ -537,10 +537,10 @@ animate :: (session: *Terminal_Session, mode: Lol_Mode) -> s32 {
         width: ssize = 80;
         height: ssize = 24;
         if session.size() == {
-            case .Ok(size);
-                width = cast(ssize) size.columns.max(1);
-                height = cast(ssize) size.rows.max(1);
-            else;
+        case .Ok(size);
+            width = cast(ssize) size.columns.max(1);
+            height = cast(ssize) size.rows.max(1);
+        else;
         }
         if !started {
             scene_init(&scene, width, height);
@@ -551,9 +551,9 @@ animate :: (session: *Terminal_Session, mode: Lol_Mode) -> s32 {
         canvas.resize(width, height);
         scene_draw(&scene, &canvas);
         if canvas.render_at(session, 0, 0) == {
-            case .Err;
-                break;
-            else;
+        case .Err;
+            break;
+        else;
         }
         reset_temporary_storage();
         scene_step(&scene);

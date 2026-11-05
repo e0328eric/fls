@@ -82,12 +82,12 @@ no_color_env :: () -> bool {
 
 decide :: (when: When, tty: bool) -> bool {
     if when == {
-        case .Always;
-            return true;
-        case .Never;
-            return false;
-        case .Auto;
-            return tty;
+    case .Always;
+        return true;
+    case .Never;
+        return false;
+    case .Auto;
+        return tty;
     }
 }
 
@@ -200,8 +200,8 @@ list_arguments :: (r: *Render) {
 list_directory :: (r: *Render, path: str, depth: s64, header: str) {
     options := r.options;
     loaded := load_directory(path, &options.filter);
-    #pattern.Ok(found) := loaded else {
-        if #pattern.Err(error) = loaded report_unreadable(r, path, error.os_code);
+    #pattern .Ok(found) := loaded else {
+        if #pattern .Err(error) = loaded report_unreadable(r, path, error.os_code);
         return;
     };
     entries := found;
@@ -246,10 +246,10 @@ apply_total_sizes :: (r: *Render, entries: []Entry) {
         if e.stat_ok && e.meta.kind == .Directory && e.name != ".." {
             // An unreadable directory keeps showing "-".
             if read_directory(e.path) == {
-                case .Ok(list);
-                    list.free();
-                    e.total_size = directory_size(e.path, 0);
-                case .Err;
+            case .Ok(list);
+                list.free();
+                e.total_size = directory_size(e.path, 0);
+            case .Err;
             }
         }
     }
@@ -258,7 +258,7 @@ apply_total_sizes :: (r: *Render, entries: []Entry) {
 /// Recursive apparent size of a directory, not following symbolic links.
 directory_size :: (path: str, depth: s64) -> s64 {
     if depth > 64 return 0;
-    #pattern.Ok(list) := read_directory(path) else {
+    #pattern .Ok(list) := read_directory(path) else {
         return 0;
     };
     defer list.free();
@@ -266,7 +266,7 @@ directory_size :: (path: str, depth: s64) -> s64 {
     for item: list.entries {
         child := join_path(path, item.name);
         defer child.free();
-        #pattern.Ok(m) := metadata(child) else {
+        #pattern .Ok(m) := metadata(child) else {
             continue;
         };
         if m.kind == .Directory total += directory_size(child, depth + 1);
@@ -278,17 +278,17 @@ directory_size :: (path: str, depth: s64) -> s64 {
 render_listing :: (r: *Render, entries: []Entry) {
     if entries.count == 0 return;
     if r.options.layout == {
-        case .Long;
-            no_prefixes: []str;
-            render_long(r, entries, no_prefixes);
-        case .Oneline;
-            for *e: entries {
-                cell := name_cell(r, e, true);
-                output.write_string(cell.text);
-                output.write_string("\n");
-            }
-        case .Grid;
-            render_grid(r, entries);
+    case .Long;
+        no_prefixes: []str;
+        render_long(r, entries, no_prefixes);
+    case .Oneline;
+        for *e: entries {
+            cell := name_cell(r, e, true);
+            output.write_string(cell.text);
+            output.write_string("\n");
+        }
+    case .Grid;
+        render_grid(r, entries);
     }
     maybe_flush();
 }
@@ -328,16 +328,16 @@ write_name_text :: (r: *Render, b: *String_Builder, name: str, style: Terminal_S
         b.write_string(name[start..i]);
         width += text_width(name[start..i]);
         escaped := ifx c == {
-            case 10;
-                "\\n";
-            case 9;
-                "\\t";
-            case 13;
-                "\\r";
-            case 27;
-                "\\e";
-            else;
-                tprint("\\x{}", hex2(c));
+        case 10;
+            "\\n";
+        case 9;
+            "\\t";
+        case 13;
+            "\\r";
+        case 27;
+            "\\e";
+        else;
+            tprint("\\x{}", hex2(c));
         };
         if r.color {
             b.write_string("\x1b[0m");
@@ -448,13 +448,13 @@ name_cell :: (r: *Render, e: *const Entry, link_target: bool) -> Cell {
 
 kind_suffix :: (m: Metadata) -> str {
     if m.kind == {
-        case .Directory;
-            return "/";
-        case .Fifo;
-            return "|";
-        case .Socket;
-            return "=";
-        else;
+    case .Directory;
+        return "/";
+    case .Fifo;
+        return "|";
+    case .Socket;
+        return "=";
+    else;
     }
     if is_executable(m) return "*";
     return "";
@@ -476,20 +476,20 @@ write_link_target :: (r: *Render, b: *String_Builder, e: *const Entry) -> ssize 
     leaf := target[cut..target.count];
     style := class_style(.Normal);
     if e.target_meta.kind == {
-        case .Directory;
-            style = class_style(.Directory);
-        case .Regular;
-            if is_executable(e.target_meta) style = class_style(.Executable);
-            else style = pattern_style(leaf).unwrap_or(class_style(classify_name(leaf)));
-        case .Fifo;
-            style = class_style(.Pipe);
-        case .Socket;
-            style = class_style(.Socket);
-        case .Block_Device;
-            style = class_style(.Block_Device);
-        case .Character_Device;
-            style = class_style(.Char_Device);
-        else;
+    case .Directory;
+        style = class_style(.Directory);
+    case .Regular;
+        if is_executable(e.target_meta) style = class_style(.Executable);
+        else style = pattern_style(leaf).unwrap_or(class_style(classify_name(leaf)));
+    case .Fifo;
+        style = class_style(.Pipe);
+    case .Socket;
+        style = class_style(.Socket);
+    case .Block_Device;
+        style = class_style(.Block_Device);
+    case .Character_Device;
+        style = class_style(.Char_Device);
+    else;
     }
     saved := r.options.quotes;
     r.options.quotes = false;
@@ -605,34 +605,34 @@ Column :: enum {
 
 column_title :: (c: Column) -> str {
     if c == {
-        case .Inode;
-            return "inode";
-        case .Octal;
-            return "Octal";
-        case .Permissions;
-            return "Permissions";
-        case .Links;
-            return "Links";
-        case .Size;
-            return "Size";
-        case .Blocks;
-            return "Blocksize";
-        case .User;
-            return "User";
-        case .Group;
-            return "Group";
-        case .Modified;
-            return "Date Modified";
-        case .Changed;
-            return "Date Changed";
-        case .Created;
-            return "Date Created";
-        case .Accessed;
-            return "Date Accessed";
-        case .Git;
-            return "Git";
-        case .Name;
-            return "Name";
+    case .Inode;
+        return "inode";
+    case .Octal;
+        return "Octal";
+    case .Permissions;
+        return "Permissions";
+    case .Links;
+        return "Links";
+    case .Size;
+        return "Size";
+    case .Blocks;
+        return "Blocksize";
+    case .User;
+        return "User";
+    case .Group;
+        return "Group";
+    case .Modified;
+        return "Date Modified";
+    case .Changed;
+        return "Date Changed";
+    case .Created;
+        return "Date Created";
+    case .Accessed;
+        return "Date Accessed";
+    case .Git;
+        return "Git";
+    case .Name;
+        return "Name";
     }
 }
 
@@ -740,43 +740,43 @@ column_cell :: (r: *Render, e: *const Entry, c: Column) -> Cell {
     if e.is_error return .{ "", 0 };
     if !e.stat_ok return styled_cell(r, "?", theme.punctuation);
     if c == {
-        case .Inode;
-            return styled_cell(r, tprint("{}", m.file_id.low), theme.inode);
-        case .Octal;
-            return styled_cell(r, octal_text(cast(u32) m.permissions & 8#7777), theme.octal);
-        case .Permissions;
-            return permissions_cell(r, e);
-        case .Links;
-            style := ifx m.kind != .Directory && m.link_count > 1 theme.links_multi else theme.links;
-            return styled_cell(r, tprint("{}", m.link_count), style);
-        case .Size;
-            return size_cell(r, e);
-        case .Blocks;
-            kind := ifx e.dereferenced e.target_meta.kind else m.kind;
-            if kind != .Regular return styled_cell(r, "-", theme.punctuation);
-            bytes := m.block_count * 512;
-            number, unit := human_size(bytes, r.options.size_format);
-            return styled_cell(r, tprint("{}{}", number, unit), size_style(bytes));
-        case .User;
-            name := ifx r.options.numeric tprint("{}", m.owner) else user_name(m.owner);
-            style := ifx m.owner == current_uid() theme.user_self else theme.user_other;
-            return styled_cell(r, name, style);
-        case .Group;
-            name := ifx r.options.numeric tprint("{}", m.group) else group_name(m.group);
-            style := ifx in_group(m.group) theme.group_self else theme.group_other;
-            return styled_cell(r, name, style);
-        case .Modified;
-            return time_cell(r, m.modified);
-        case .Changed;
-            return time_cell(r, m.changed);
-        case .Created;
-            return time_cell(r, m.created);
-        case .Accessed;
-            return time_cell(r, m.accessed);
-        case .Git;
-            return git_cell(r, e);
-        case .Name;
-            return name_cell(r, e, true);
+    case .Inode;
+        return styled_cell(r, tprint("{}", m.file_id.low), theme.inode);
+    case .Octal;
+        return styled_cell(r, octal_text(cast(u32) m.permissions & 8#7777), theme.octal);
+    case .Permissions;
+        return permissions_cell(r, e);
+    case .Links;
+        style := ifx m.kind != .Directory && m.link_count > 1 theme.links_multi else theme.links;
+        return styled_cell(r, tprint("{}", m.link_count), style);
+    case .Size;
+        return size_cell(r, e);
+    case .Blocks;
+        kind := ifx e.dereferenced e.target_meta.kind else m.kind;
+        if kind != .Regular return styled_cell(r, "-", theme.punctuation);
+        bytes := m.block_count * 512;
+        number, unit := human_size(bytes, r.options.size_format);
+        return styled_cell(r, tprint("{}{}", number, unit), size_style(bytes));
+    case .User;
+        name := ifx r.options.numeric tprint("{}", m.owner) else user_name(m.owner);
+        style := ifx m.owner == current_uid() theme.user_self else theme.user_other;
+        return styled_cell(r, name, style);
+    case .Group;
+        name := ifx r.options.numeric tprint("{}", m.group) else group_name(m.group);
+        style := ifx in_group(m.group) theme.group_self else theme.group_other;
+        return styled_cell(r, name, style);
+    case .Modified;
+        return time_cell(r, m.modified);
+    case .Changed;
+        return time_cell(r, m.changed);
+    case .Created;
+        return time_cell(r, m.created);
+    case .Accessed;
+        return time_cell(r, m.accessed);
+    case .Git;
+        return git_cell(r, e);
+    case .Name;
+        return name_cell(r, e, true);
     }
 }
 
@@ -796,21 +796,21 @@ git_cell :: (r: *Render, e: *const Entry) -> Cell {
     for code: .[e.git_x, e.git_y] {
         style := theme.punctuation;
         if code == {
-            case #char "N";
-                style = theme.git_new;
-            case #char "M";
-                style = theme.git_modified;
-            case #char "D";
-                style = theme.git_deleted;
-            case #char "R";
-                style = theme.git_renamed;
-            case #char "T";
-                style = theme.git_typechange;
-            case #char "I";
-                style = theme.git_ignored;
-            case #char "U";
-                style = theme.git_conflicted;
-            else;
+        case #char "N";
+            style = theme.git_new;
+        case #char "M";
+            style = theme.git_modified;
+        case #char "D";
+            style = theme.git_deleted;
+        case #char "R";
+            style = theme.git_renamed;
+        case #char "T";
+            style = theme.git_typechange;
+        case #char "I";
+            style = theme.git_ignored;
+        case #char "U";
+            style = theme.git_conflicted;
+        else;
         }
         write_styled(&b, tprint("{c}", code), style, r.color);
     }
@@ -857,25 +857,25 @@ permissions_cell :: (r: *Render, e: *const Entry) -> Cell {
     type_char := ".";
     type_class := File_Class.Normal;
     if m.kind == {
-        case .Directory;
-            type_char = "d";
-            type_class = .Directory;
-        case .Symlink;
-            type_char = "l";
-            type_class = .Symlink;
-        case .Fifo;
-            type_char = "|";
-            type_class = .Pipe;
-        case .Socket;
-            type_char = "s";
-            type_class = .Socket;
-        case .Block_Device;
-            type_char = "b";
-            type_class = .Block_Device;
-        case .Character_Device;
-            type_char = "c";
-            type_class = .Char_Device;
-        else;
+    case .Directory;
+        type_char = "d";
+        type_class = .Directory;
+    case .Symlink;
+        type_char = "l";
+        type_class = .Symlink;
+    case .Fifo;
+        type_char = "|";
+        type_class = .Pipe;
+    case .Socket;
+        type_char = "s";
+        type_class = .Socket;
+    case .Block_Device;
+        type_char = "b";
+        type_class = .Block_Device;
+    case .Character_Device;
+        type_char = "c";
+        type_class = .Char_Device;
+    else;
     }
     write_styled(&b, type_char, class_style(type_class), r.color);
     is_file := m.kind == .Regular;
@@ -987,9 +987,9 @@ collect_tree :: (
 ) {
     if r.options.level >= 0 && depth > r.options.level return;
     loaded := load_directory(path, &r.options.filter);
-    #pattern.Ok(found) := loaded else {
+    #pattern .Ok(found) := loaded else {
         // eza shows the failure as the directory's only child.
-        if #pattern.Err(error) = loaded {
+        if #pattern .Err(error) = loaded {
             failure: Entry;
             failure.name = tprint("<{} (os error {})>", os_error_text(error.os_code), error.os_code).clone();
             failure.path = path.clone();

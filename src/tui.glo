@@ -213,21 +213,21 @@ run_interactive :: (app: *App) -> s32 {
     idle_ticks := 0;
     while !app.quit {
         if app.session.size() == {
-            case .Ok(size);
-                w := cast(ssize) size.columns.max(1);
-                h := cast(ssize) size.rows.max(1);
-                if w != canvas.width || h != canvas.height {
-                    canvas.resize(w, h);
-                    dirty = true;
-                }
-            else;
+        case .Ok(size);
+            w := cast(ssize) size.columns.max(1);
+            h := cast(ssize) size.rows.max(1);
+            if w != canvas.width || h != canvas.height {
+                canvas.resize(w, h);
+                dirty = true;
+            }
+        else;
         }
         if dirty {
             caret := render(app, &canvas);
             if canvas.render_at(&app.session, 0, 0) == {
-                case .Err;
-                    return 1;
-                else;
+            case .Err;
+                return 1;
+            else;
             }
             _ = app.session.cursor_show(caret.x >= 0);
             if caret.x >= 0 _ = app.session.cursor_to(cast(s64) caret.x, cast(s64) caret.y);
@@ -238,21 +238,21 @@ run_interactive :: (app: *App) -> s32 {
         event := app.session.read_event(1000);
         if app.session.input_closed break;
         if event.kind == {
-            case .Key;
-                handle_key(app, event.key, &canvas);
+        case .Key;
+            handle_key(app, event.key, &canvas);
+            dirty = true;
+        case .Mouse;
+            if handle_mouse(app, event.mouse, &canvas) dirty = true;
+        case .Resize;
+            dirty = true;
+        case .None;
+            // Idle: pick up changes made by other programs.
+            idle_ticks += 1;
+            if app.mode == .Normal && directory_changed(app) {
+                reload_keep_cursor(app);
                 dirty = true;
-            case .Mouse;
-                if handle_mouse(app, event.mouse, &canvas) dirty = true;
-            case .Resize;
-                dirty = true;
-            case .None;
-                // Idle: pick up changes made by other programs.
-                idle_ticks += 1;
-                if app.mode == .Normal && directory_changed(app) {
-                    reload_keep_cursor(app);
-                    dirty = true;
-                }
-            else;
+            }
+        else;
         }
     }
     return 0;
@@ -261,12 +261,12 @@ run_interactive :: (app: *App) -> s32 {
 begin_session :: (app: *App) -> bool {
     flags := Terminal_Flags.Default | Terminal_Flags.Mouse | Terminal_Flags.Bracketed_Paste;
     if Terminal_Session.terminal_begin(flags, .title = "fls") == {
-        case .Ok(session);
-            app.session = session;
-            app.have_session = true;
-            return true;
-        case .Err;
-            return false;
+    case .Ok(session);
+        app.session = session;
+        app.have_session = true;
+        return true;
+    case .Err;
+        return false;
     }
 }
 
@@ -326,44 +326,44 @@ parse_key_token :: (keys: str, i: ssize) -> (Terminal_Key, ssize) {
             name := keys[i + 1..j];
             used := j - i + 1;
             if name == {
-                case "Enter", "CR";
-                    key.code = .Enter;
-                case "Esc";
-                    key.code = .Escape;
-                case "Up";
-                    key.code = .Up;
-                case "Down";
-                    key.code = .Down;
-                case "Left";
-                    key.code = .Left;
-                case "Right";
-                    key.code = .Right;
-                case "Home";
-                    key.code = .Home;
-                case "End";
-                    key.code = .End;
-                case "PgUp";
-                    key.code = .Page_Up;
-                case "PgDn";
-                    key.code = .Page_Down;
-                case "Tab";
-                    key.code = .Tab;
-                case "S-Tab";
-                    key.code = .Tab;
-                    key.shift = true;
-                case "BS";
-                    key.code = .Backspace;
-                case "Del";
-                    key.code = .Delete;
-                case "Space";
-                    key.rune = 32;
-                case "lt";
-                    key.rune = cast(u32) #char "<";
-                else;
-                    if name.count == 3 && name[0] == #char "C" && name[1] == #char "-" {
-                        key.ctrl = true;
-                        key.rune = cast(u32) name[2];
-                    }
+            case "Enter", "CR";
+                key.code = .Enter;
+            case "Esc";
+                key.code = .Escape;
+            case "Up";
+                key.code = .Up;
+            case "Down";
+                key.code = .Down;
+            case "Left";
+                key.code = .Left;
+            case "Right";
+                key.code = .Right;
+            case "Home";
+                key.code = .Home;
+            case "End";
+                key.code = .End;
+            case "PgUp";
+                key.code = .Page_Up;
+            case "PgDn";
+                key.code = .Page_Down;
+            case "Tab";
+                key.code = .Tab;
+            case "S-Tab";
+                key.code = .Tab;
+                key.shift = true;
+            case "BS";
+                key.code = .Backspace;
+            case "Del";
+                key.code = .Delete;
+            case "Space";
+                key.rune = 32;
+            case "lt";
+                key.rune = cast(u32) #char "<";
+            else;
+                if name.count == 3 && name[0] == #char "C" && name[1] == #char "-" {
+                    key.ctrl = true;
+                    key.rune = cast(u32) name[2];
+                }
             }
             return key, used;
         }
@@ -401,10 +401,10 @@ load_current :: (app: *App, focus: str) {
     filter: Filter_Options;
     filter.all = ifx tab.hidden 1 else 0;
     if load_directory(tab.path, &filter) == {
-        case .Ok(list);
-            app.entries = list;
-        case .Err(error);
-            app.load_error = tprint("{}: {}", os_error_text(error.os_code), tab.path).clone();
+    case .Ok(list);
+        app.entries = list;
+    case .Err(error);
+        app.load_error = tprint("{}: {}", os_error_text(error.os_code), tab.path).clone();
     }
     sort_entries(app.entries[..], tab.sort);
     app.dir_modified = directory_mtime(tab.path);
@@ -421,7 +421,7 @@ load_current :: (app: *App, focus: str) {
 }
 
 directory_mtime :: (path: str) -> s64 {
-    #pattern.Ok(m) := metadata(path) else {
+    #pattern .Ok(m) := metadata(path) else {
         return 0;
     };
     return m.modified.seconds * 1_000_000_000 + cast(s64) m.modified.nanoseconds;
@@ -534,22 +534,22 @@ is_ctrl :: (key: Terminal_Key, c: u8) -> bool {
 handle_key :: (app: *App, key: Terminal_Key, canvas: *Terminal_Canvas) {
     if key.pasted && app.mode != .Filter && app.mode != .Prompt return;
     if app.mode == {
-        case .Help, .Info;
-            app.mode = .Normal;
-            return;
-        case .Sort_Menu;
-            handle_sort_key(app, key);
-            return;
-        case .Confirm;
-            handle_confirm_key(app, key);
-            return;
-        case .Filter;
-            handle_filter_key(app, key);
-            return;
-        case .Prompt;
-            handle_prompt_key(app, key);
-            return;
-        case .Normal;
+    case .Help, .Info;
+        app.mode = .Normal;
+        return;
+    case .Sort_Menu;
+        handle_sort_key(app, key);
+        return;
+    case .Confirm;
+        handle_confirm_key(app, key);
+        return;
+    case .Filter;
+        handle_filter_key(app, key);
+        return;
+    case .Prompt;
+        handle_prompt_key(app, key);
+        return;
+    case .Normal;
     }
     free_string(&app.message);
     tab := current_tab(app);
@@ -557,64 +557,64 @@ handle_key :: (app: *App, key: Terminal_Key, canvas: *Terminal_Canvas) {
     count := app.view.count;
 
     if key.code == {
-        case .Up;
-            move_cursor(app, -1);
-            return;
-        case .Down;
-            move_cursor(app, 1);
-            return;
-        case .Page_Up;
-            move_cursor(app, -page);
-            return;
-        case .Page_Down;
-            move_cursor(app, page);
-            return;
-        case .Home;
-            tab.cursor = 0;
-            return;
-        case .End;
-            tab.cursor = count - 1;
+    case .Up;
+        move_cursor(app, -1);
+        return;
+    case .Down;
+        move_cursor(app, 1);
+        return;
+    case .Page_Up;
+        move_cursor(app, -page);
+        return;
+    case .Page_Down;
+        move_cursor(app, page);
+        return;
+    case .Home;
+        tab.cursor = 0;
+        return;
+    case .End;
+        tab.cursor = count - 1;
+        clamp_cursor(app);
+        return;
+    case .Left, .Backspace;
+        go_parent(app);
+        return;
+    case .Right, .Enter;
+        open_current(app);
+        return;
+    case .Tab;
+        step := ifx key.shift CONTEXTS - 1 else 1;
+        switch_tab(app, (app.current + step) % CONTEXTS);
+        return;
+    case .Escape;
+        if tab.filter.count > 0 {
+            free_string(&tab.filter);
+            rebuild_view(app);
             clamp_cursor(app);
-            return;
-        case .Left, .Backspace;
-            go_parent(app);
-            return;
-        case .Right, .Enter;
-            open_current(app);
-            return;
-        case .Tab;
-            step := ifx key.shift CONTEXTS - 1 else 1;
-            switch_tab(app, (app.current + step) % CONTEXTS);
-            return;
-        case .Escape;
-            if tab.filter.count > 0 {
-                free_string(&tab.filter);
-                rebuild_view(app);
-                clamp_cursor(app);
-            }
-            return;
-        case .F5;
-            reload_keep_cursor(app);
-            return;
-        else;
+        }
+        return;
+    case .F5;
+        reload_keep_cursor(app);
+        return;
+    else;
     }
     if key.code != .Character return;
     if key.ctrl {
         if key.rune > 127 return;
         if cast(u8) key.rune == {
-            case #char "n";
-                move_cursor(app, 1);
-            case #char "p";
-                move_cursor(app, -1);
-            case #char "d";
-                move_cursor(app, page / 2);
-            case #char "u";
-                move_cursor(app, -(page / 2));
-            case #char "l";
-                reload_keep_cursor(app);
-            case #char "c", #char "q";
-                app.quit = true;
-            else;
+        case #char "n";
+            move_cursor(app, 1);
+        case #char "p";
+            move_cursor(app, -1);
+        case #char "d";
+            move_cursor(app, page / 2);
+        case #char "u";
+            move_cursor(app, -(page / 2));
+        case #char "l";
+            reload_keep_cursor(app);
+        case #char "c", #char "q";
+            app.quit = true;
+        else;
         }
         return;
     }
@@ -622,105 +622,105 @@ handle_key :: (app: *App, key: Terminal_Key, canvas: *Terminal_Canvas) {
     if key.rune > 127 return;
     c := cast(u8) key.rune;
     if c == {
-        case #char "j";
+    case #char "j";
+        move_cursor(app, 1);
+    case #char "k";
+        move_cursor(app, -1);
+    case #char "h";
+        go_parent(app);
+    case #char "l";
+        open_current(app);
+    case #char "g";
+        tab.cursor = 0;
+    case #char "G";
+        tab.cursor = count - 1;
+        clamp_cursor(app);
+    case #char "q";
+        app.quit = true;
+        app.write_cd = true;
+    case #char "Q";
+        app.quit = true;
+    case #char "~";
+        if app.home.count > 0 change_dir(app, app.home);
+    case #char "`";
+        change_dir(app, "/");
+    case #char "@";
+        change_dir(app, app.start_dir);
+    case #char "-";
+        if tab.previous.count > 0 {
+            target := tprint("{}", tab.previous);
+            change_dir(app, target);
+        }
+    case #char "1", #char "2", #char "3", #char "4";
+        switch_tab(app, cast(ssize)(c - #char "1"));
+    case #char "/";
+        app.mode = .Filter;
+        app.input.set_text(tab.filter);
+    case #char ".";
+        tab.hidden = !tab.hidden;
+        set_message(app, ifx tab.hidden "showing hidden files" else "hiding hidden files");
+        reload_keep_cursor(app);
+    case #char "d";
+        app.detail = !app.detail;
+    case #char "P";
+        app.preview_on = !app.preview_on;
+    case #char "I";
+        app.icons = !app.icons;
+    case #char "t";
+        app.mode = .Sort_Menu;
+    case #char "?";
+        app.mode = .Help;
+    case #char "i";
+        if count > 0 app.mode = .Info;
+    case #char " ", #char "+";
+        if #pattern ?e = current_entry(app) {
+            toggle_selection(app, e);
             move_cursor(app, 1);
-        case #char "k";
-            move_cursor(app, -1);
-        case #char "h";
-            go_parent(app);
-        case #char "l";
-            open_current(app);
-        case #char "g";
-            tab.cursor = 0;
-        case #char "G";
-            tab.cursor = count - 1;
-            clamp_cursor(app);
-        case #char "q";
-            app.quit = true;
-            app.write_cd = true;
-        case #char "Q";
-            app.quit = true;
-        case #char "~";
-            if app.home.count > 0 change_dir(app, app.home);
-        case #char "`";
-            change_dir(app, "/");
-        case #char "@";
-            change_dir(app, app.start_dir);
-        case #char "-";
-            if tab.previous.count > 0 {
-                target := tprint("{}", tab.previous);
-                change_dir(app, target);
+        }
+    case #char "a";
+        for index: app.view {
+            e := &app.entries[index];
+            if selection_index(app, e.path) < 0 app.selection.push(e.path.clone());
+        }
+        set_message(app, tprint("{} selected", app.selection.count));
+    case #char "A";
+        for index: app.view toggle_selection(app, &app.entries[index]);
+        set_message(app, tprint("{} selected", app.selection.count));
+    case #char "u";
+        clear_selection(app);
+        set_message(app, "selection cleared");
+    case #char "p";
+        paste_selection(app, false);
+    case #char "v";
+        paste_selection(app, true);
+    case #char "x";
+        if app.selection.count > 0 || count > 0 {
+            app.mode = .Confirm;
+            app.confirm = .Delete;
+        }
+    case #char "r";
+        if #pattern ?e = current_entry(app) start_prompt(app, .Rename, e.name);
+    case #char "n";
+        start_prompt(app, .Create, "");
+    case #char "c";
+        start_prompt(app, .Change_Dir, "");
+    case #char "o";
+        if count > 0 start_prompt(app, .Open_With, "");
+    case #char "e";
+        if #pattern ?e = current_entry(app) {
+            editor := environment_get_or("VISUAL", "").unwrap_or("".clone());
+            if editor.count == 0 {
+                editor.free();
+                editor = environment_get_or("EDITOR", "vi").unwrap_or("vi".clone());
             }
-        case #char "1", #char "2", #char "3", #char "4";
-            switch_tab(app, cast(ssize)(c - #char "1"));
-        case #char "/";
-            app.mode = .Filter;
-            app.input.set_text(tab.filter);
-        case #char ".";
-            tab.hidden = !tab.hidden;
-            set_message(app, ifx tab.hidden "showing hidden files" else "hiding hidden files");
-            reload_keep_cursor(app);
-        case #char "d";
-            app.detail = !app.detail;
-        case #char "P";
-            app.preview_on = !app.preview_on;
-        case #char "I";
-            app.icons = !app.icons;
-        case #char "t";
-            app.mode = .Sort_Menu;
-        case #char "?";
-            app.mode = .Help;
-        case #char "i";
-            if count > 0 app.mode = .Info;
-        case #char " ", #char "+";
-            if #pattern ?e = current_entry(app) {
-                toggle_selection(app, e);
-                move_cursor(app, 1);
-            }
-        case #char "a";
-            for index: app.view {
-                e := &app.entries[index];
-                if selection_index(app, e.path) < 0 app.selection.push(e.path.clone());
-            }
-            set_message(app, tprint("{} selected", app.selection.count));
-        case #char "A";
-            for index: app.view toggle_selection(app, &app.entries[index]);
-            set_message(app, tprint("{} selected", app.selection.count));
-        case #char "u";
-            clear_selection(app);
-            set_message(app, "selection cleared");
-        case #char "p";
-            paste_selection(app, false);
-        case #char "v";
-            paste_selection(app, true);
-        case #char "x";
-            if app.selection.count > 0 || count > 0 {
-                app.mode = .Confirm;
-                app.confirm = .Delete;
-            }
-        case #char "r";
-            if #pattern ?e = current_entry(app) start_prompt(app, .Rename, e.name);
-        case #char "n";
-            start_prompt(app, .Create, "");
-        case #char "c";
-            start_prompt(app, .Change_Dir, "");
-        case #char "o";
-            if count > 0 start_prompt(app, .Open_With, "");
-        case #char "e";
-            if #pattern ?e = current_entry(app) {
-                editor := environment_get_or("VISUAL", "").unwrap_or("".clone());
-                if editor.count == 0 {
-                    editor.free();
-                    editor = environment_get_or("EDITOR", "vi").unwrap_or("vi".clone());
-                }
-                defer editor.free();
-                run_external(app, tprint("{} {}", editor, shell_quote(e.path)), false);
-            }
-        case #char "!";
-            shell := environment_get_or("SHELL", "/bin/sh").unwrap_or("/bin/sh".clone());
-            defer shell.free();
-            run_external(app, shell_quote(shell), false);
-        else;
+            defer editor.free();
+            run_external(app, tprint("{} {}", editor, shell_quote(e.path)), false);
+        }
+    case #char "!";
+        shell := environment_get_or("SHELL", "/bin/sh").unwrap_or("/bin/sh".clone());
+        defer shell.free();
+        run_external(app, shell_quote(shell), false);
+    else;
     }
 }
 
@@ -791,11 +791,11 @@ run_external :: (app: *App, line: str, background: bool) {
         return;
     }
     if result == {
-        case .Ok(done);
-            if !done.status.exited || done.status.code != 0
-                set_message(app, tprint("exited with status {}", done.status.code), true);
-        case .Err;
-            set_message(app, tprint("could not run: {}", line), true);
+    case .Ok(done);
+        if !done.status.exited || done.status.code != 0
+            set_message(app, tprint("exited with status {}", done.status.code), true);
+    case .Err;
+        set_message(app, tprint("could not run: {}", line), true);
     }
     reload_keep_cursor(app);
 }
@@ -808,28 +808,28 @@ handle_sort_key :: (app: *App, key: Terminal_Key) {
     tab := current_tab(app);
     if key.code != .Character || key.ctrl || key.rune > 127 return;
     if cast(u8) key.rune == {
-        case #char "n";
-            tab.sort.field = .Name;
-        case #char "N";
-            tab.sort.field = .Name_Case;
-        case #char "s";
-            tab.sort.field = .Size;
-        case #char "t", #char "m";
-            tab.sort.field = .Modified;
-        case #char "a";
-            tab.sort.field = .Accessed;
-        case #char "e";
-            tab.sort.field = .Extension;
-        case #char "y";
-            tab.sort.field = .Type;
-        case #char "r";
-            tab.sort.reverse = !tab.sort.reverse;
-        case #char "d";
-            tab.sort.grouping = ifx tab.sort.grouping == .None Dir_Grouping.First else Dir_Grouping.None;
-        case #char "c";
-            tab.sort = .{ .grouping = .First };
-        else;
-            return;
+    case #char "n";
+        tab.sort.field = .Name;
+    case #char "N";
+        tab.sort.field = .Name_Case;
+    case #char "s";
+        tab.sort.field = .Size;
+    case #char "t", #char "m";
+        tab.sort.field = .Modified;
+    case #char "a";
+        tab.sort.field = .Accessed;
+    case #char "e";
+        tab.sort.field = .Extension;
+    case #char "y";
+        tab.sort.field = .Type;
+    case #char "r";
+        tab.sort.reverse = !tab.sort.reverse;
+    case #char "d";
+        tab.sort.grouping = ifx tab.sort.grouping == .None Dir_Grouping.First else Dir_Grouping.None;
+    case #char "c";
+        tab.sort = .{ .grouping = .First };
+    else;
+        return;
     }
     set_message(
         app,
@@ -899,16 +899,16 @@ start_prompt :: (app: *App, kind: Prompt_Kind, initial: str) {
 
 prompt_label :: (kind: Prompt_Kind) -> str {
     if kind == {
-        case .Rename;
-            return "rename: ";
-        case .Create;
-            return "new (end with / for a directory): ";
-        case .Change_Dir;
-            return "cd: ";
-        case .Open_With;
-            return "open with: ";
-        case .None;
-            return "";
+    case .Rename;
+        return "rename: ";
+    case .Create;
+        return "new (end with / for a directory): ";
+    case .Change_Dir;
+        return "cd: ";
+    case .Open_With;
+        return "open with: ";
+    case .None;
+        return "";
     }
 }
 
@@ -933,85 +933,73 @@ handle_prompt_key :: (app: *App, key: Terminal_Key) {
 submit_prompt :: (app: *App, kind: Prompt_Kind, text: str) {
     tab := current_tab(app);
     if kind == {
-        case .Rename;
-            #pattern ?e := current_entry(app) else {
-                return;
-            };
-            if text.contains("/") {
-                set_message(app, "a name cannot contain '/'", true);
-                return;
+    case .Rename;
+        #pattern ?e := current_entry(app) else {
+            return;
+        };
+        if text.contains("/") {
+            set_message(app, "a name cannot contain '/'", true);
+            return;
+        }
+        target := tprint("{}/{}", tab.path, text);
+        if exists(target).unwrap_or(false) {
+            set_message(app, tprint("{} already exists", text), true);
+            return;
+        }
+        if rename(e.path, target, false) == {
+        case .Ok;
+            set_message(app, tprint("renamed to {}", text));
+            load_current(app, text);
+        case .Err(error);
+            set_message(app, tprint("rename failed: {}", os_error_text(error.os_code)), true);
+        }
+    case .Create;
+        directory := text[text.count - 1] == #char "/";
+        name := text.trim_end_matches("/");
+        target := tprint("{}/{}", tab.path, name);
+        if exists(target).unwrap_or(false) {
+            set_message(app, tprint("{} already exists", name), true);
+            return;
+        }
+        ok := true;
+        if directory {
+            if create_directory(target, .Default_Directory, true) == {
+            case .Err(error);
+                ok = false;
+                set_message(app, tprint("mkdir failed: {}", os_error_text(error.os_code)), true);
+            else;
             }
-            target := tprint("{}/{}", tab.path, text);
-            if exists(target).unwrap_or(false) {
-                set_message(app, tprint("{} already exists", text), true);
-                return;
+        } else {
+            parent := parent_path(target);
+            _ := create_directory(parent, .Default_Directory, true);
+            if write_file(target, "") == {
+            case .Err(error);
+                ok = false;
+                set_message(app, tprint("create failed: {}", os_error_text(error.os_code)), true);
+            else;
             }
-            if rename(e.path, target, false) == {
-                case .Ok;
-                    set_message(app, tprint("renamed to {}", text));
-                    load_current(app, text);
-                case .Err(error);
-                    set_message(
-                        app,
-                        tprint("rename failed: {}", os_error_text(error.os_code)),
-                        true
-                    );
-            }
-        case .Create;
-            directory := text[text.count - 1] == #char "/";
-            name := text.trim_end_matches("/");
-            target := tprint("{}/{}", tab.path, name);
-            if exists(target).unwrap_or(false) {
-                set_message(app, tprint("{} already exists", name), true);
-                return;
-            }
-            ok := true;
-            if directory {
-                if create_directory(target, .Default_Directory, true) == {
-                    case .Err(error);
-                        ok = false;
-                        set_message(
-                            app,
-                            tprint("mkdir failed: {}", os_error_text(error.os_code)),
-                            true
-                        );
-                    else;
-                }
-            } else {
-                parent := parent_path(target);
-                _ := create_directory(parent, .Default_Directory, true);
-                if write_file(target, "") == {
-                    case .Err(error);
-                        ok = false;
-                        set_message(
-                            app,
-                            tprint("create failed: {}", os_error_text(error.os_code)),
-                            true
-                        );
-                    else;
-                }
-            }
-            if ok {
-                set_message(app, tprint("created {}", text));
-                first := name;
-                if #pattern ?split = name.split_once("/") first = split.before;
-                load_current(app, first);
-            }
-        case .Change_Dir;
-            path := text;
-            if path == "~" || path.starts_with("~/") path = tprint(
-                "{}{}",
-                app.home,
-                path[1..path.count]
-            );
-            else if path[0] != #char "/" path = tprint("{}/{}", tab.path, path);
-            change_dir(app, path);
-        case .Open_With;
-            #pattern ?e := current_entry(app) else {
-                return;
-            };
-            run_external(app, tprint("{} {}", text, shell_quote(e.path)), false);
-        case .None;
+        }
+        if ok {
+            set_message(app, tprint("created {}", text));
+            first := name;
+            if #pattern ?split = name.split_once("/") first = split.before;
+            load_current(app, first);
+        }
+    case .Change_Dir;
+        path := text;
+        if path == "~" || path.starts_with("~/") path = tprint(
+            "{}{}",
+            app.home,
+            path[1..path.count]
+        );
+        else if path[0] != #char "/" path = tprint("{}/{}", tab.path, path);
+        change_dir(app, path);
+    case .Open_With;
+        #pattern ?e := current_entry(app) else {
+            return;
+        };
+        run_external(app, tprint("{} {}", text, shell_quote(e.path)), false);
+    case .None;
     }
 }
 
@@ -1045,13 +1033,13 @@ paste_selection :: (app: *App, move: bool) {
         ok := false;
         if move {
             if rename(source, target, false) == {
-                case .Ok;
-                    ok = true;
-                case .Err(error);
-                    if error.kind == .Cross_Device {
-                        ok = copy_path(source, target, &error_code);
-                        if ok _ := remove_all(source);
-                    } else error_code = error.os_code;
+            case .Ok;
+                ok = true;
+            case .Err(error);
+                if error.kind == .Cross_Device {
+                    ok = copy_path(source, target, &error_code);
+                    if ok _ := remove_all(source);
+                } else error_code = error.os_code;
             }
         } else {
             ok = copy_path(source, target, &error_code);
@@ -1077,19 +1065,19 @@ copy_path :: (source: str, target: str, code: *s64) -> bool {
             .Fail_If_Exists,
             Copy_Flags.Default | .Recursive | .Preserve_Links
         ) == {
-            case .Ok;
-                return true;
-            case .Err(error);
-                code.* = error.os_code;
-                return false;
-        }
-    }
-    if copy_file(source, target, .Fail_If_Exists, Copy_Flags.Default | .Preserve_Links) == {
         case .Ok;
             return true;
         case .Err(error);
             code.* = error.os_code;
             return false;
+        }
+    }
+    if copy_file(source, target, .Fail_If_Exists, Copy_Flags.Default | .Preserve_Links) == {
+    case .Ok;
+        return true;
+    case .Err(error);
+        code.* = error.os_code;
+        return false;
     }
 }
 
@@ -1108,19 +1096,19 @@ delete_targets :: (app: *App) {
         dir := is_directory(path).unwrap_or(false) && !is_symlink(path).unwrap_or(false);
         if dir {
             if remove_all(path) == {
-                case .Ok;
-                    done += 1;
-                case .Err(error);
-                    failed += 1;
-                    last_error = tprint("{}: {}", base_name(path), os_error_text(error.os_code));
+            case .Ok;
+                done += 1;
+            case .Err(error);
+                failed += 1;
+                last_error = tprint("{}: {}", base_name(path), os_error_text(error.os_code));
             }
         } else {
             if remove(path) == {
-                case .Ok;
-                    done += 1;
-                case .Err(error);
-                    failed += 1;
-                    last_error = tprint("{}: {}", base_name(path), os_error_text(error.os_code));
+            case .Ok;
+                done += 1;
+            case .Err(error);
+                failed += 1;
+                last_error = tprint("{}: {}", base_name(path), os_error_text(error.os_code));
             }
         }
     }
@@ -1211,13 +1199,13 @@ render :: (app: *App, canvas: *Terminal_Canvas) -> Terminal_Point {
     }
     caret = draw_status(app, canvas, h - 1);
     if app.mode == {
-        case .Help;
-            draw_help(canvas);
-        case .Info;
-            draw_info(app, canvas);
-        case .Sort_Menu;
-            draw_sort_menu(app, canvas);
-        else;
+    case .Help;
+        draw_help(canvas);
+    case .Info;
+        draw_info(app, canvas);
+    case .Sort_Menu;
+        draw_sort_menu(app, canvas);
+    else;
     }
     return caret;
 }
@@ -1372,19 +1360,19 @@ permission_text :: (m: Metadata) -> str {
     p := cast(u32) m.permissions;
     t := ".";
     if m.kind == {
-        case .Directory;
-            t = "d";
-        case .Symlink;
-            t = "l";
-        case .Fifo;
-            t = "|";
-        case .Socket;
-            t = "s";
-        case .Block_Device;
-            t = "b";
-        case .Character_Device;
-            t = "c";
-        else;
+    case .Directory;
+        t = "d";
+    case .Symlink;
+        t = "l";
+    case .Fifo;
+        t = "|";
+    case .Socket;
+        t = "s";
+    case .Block_Device;
+        t = "b";
+    case .Character_Device;
+        t = "c";
+    else;
     }
     bits := "rwxrwxrwx";
     b: String_Builder;
@@ -1469,20 +1457,20 @@ draw_status :: (app: *App, canvas: *Terminal_Canvas, y: ssize) -> Terminal_Point
 sort_label :: (sort: Sort_Options) -> str {
     name := "name";
     if sort.field == {
-        case .Name, .Name_Case;
-            name = "name";
-        case .Size;
-            name = "size";
-        case .Modified;
-            name = "time";
-        case .Accessed;
-            name = "atime";
-        case .Extension, .Extension_Case;
-            name = "ext";
-        case .Type;
-            name = "type";
-        else;
-            name = "other";
+    case .Name, .Name_Case;
+        name = "name";
+    case .Size;
+        name = "size";
+    case .Modified;
+        name = "time";
+    case .Accessed;
+        name = "atime";
+    case .Extension, .Extension_Case;
+        name = "ext";
+    case .Type;
+        name = "type";
+    else;
+        name = "other";
     }
     return tprint("{}{}", ifx sort.reverse "↓" else "↑", name);
 }
@@ -1566,11 +1554,11 @@ load_preview :: (app: *App, e: *Entry) {
         filter: Filter_Options;
         filter.all = ifx current_tab(app).hidden 1 else 0;
         if load_directory(e.path, &filter) == {
-            case .Ok(list);
-                p.entries = list;
-                sort_entries(p.entries[..], current_tab(app).sort);
-            case .Err(error);
-                p.message = tprint("{}", os_error_text(error.os_code)).clone();
+        case .Ok(list);
+            p.entries = list;
+            sort_entries(p.entries[..], current_tab(app).sort);
+        case .Err(error);
+            p.message = tprint("{}", os_error_text(error.os_code)).clone();
         }
         return;
     }
@@ -1584,33 +1572,33 @@ load_preview :: (app: *App, e: *Entry) {
         return;
     }
     if read_file_up_to(e.path, 16384) == {
-        case .Err(error);
-            p.message = tprint("{}", os_error_text(error.os_code)).clone();
-        case .Ok(text);
-            defer text.free();
-            binary := false;
-            for i: 0..text.count.min(4096) if text[i] == 0 {
-                binary = true;
-                break;
-            }
-            // A read cut mid-character leaves at most three stray bytes.
-            bad := text.bytes().utf8_invalid_index();
-            if binary || (bad >= 0 && bad < text.count - 3) {
-                size_number, size_unit := human_size(e.meta.size, .Binary);
-                p.message = tprint("binary data, {}{}B", size_number, size_unit).clone();
-                return;
-            }
-            if text.count == 0 {
-                p.message = "empty file".clone();
-                return;
-            }
-            start: ssize = 0;
-            while start < text.count && p.lines.count < 400 {
-                end := start;
-                while end < text.count && text[end] != 10 end += 1;
-                p.lines.push(clean_line(text[start..end]));
-                start = end + 1;
-            }
+    case .Err(error);
+        p.message = tprint("{}", os_error_text(error.os_code)).clone();
+    case .Ok(text);
+        defer text.free();
+        binary := false;
+        for i: 0..text.count.min(4096) if text[i] == 0 {
+            binary = true;
+            break;
+        }
+        // A read cut mid-character leaves at most three stray bytes.
+        bad := text.bytes().utf8_invalid_index();
+        if binary || (bad >= 0 && bad < text.count - 3) {
+            size_number, size_unit := human_size(e.meta.size, .Binary);
+            p.message = tprint("binary data, {}{}B", size_number, size_unit).clone();
+            return;
+        }
+        if text.count == 0 {
+            p.message = "empty file".clone();
+            return;
+        }
+        start: ssize = 0;
+        while start < text.count && p.lines.count < 400 {
+            end := start;
+            while end < text.count && text[end] != 10 end += 1;
+            p.lines.push(clean_line(text[start..end]));
+            start = end + 1;
+        }
     }
 }
 

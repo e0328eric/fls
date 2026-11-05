@@ -106,25 +106,25 @@ entry_stat :: (e: *Entry, dereference: bool = false) {
     e.dereferenced = false;
     e.stat_ok = false;
     if metadata(e.path) == {
-        case .Ok(m);
-            e.meta = m;
-            e.stat_ok = true;
-        case .Err(error);
-            e.stat_error = error.kind;
-            e.stat_code = error.os_code;
+    case .Ok(m);
+        e.meta = m;
+        e.stat_ok = true;
+    case .Err(error);
+        e.stat_error = error.kind;
+        e.stat_code = error.os_code;
     }
     if e.stat_ok && e.meta.kind == .Symlink {
         if read_link(e.path) == {
-            case .Ok(target);
-                e.link_target = target.value.clone();
-                target.free();
-            else;
+        case .Ok(target);
+            e.link_target = target.value.clone();
+            target.free();
+        else;
         }
         if metadata(e.path, true) == {
-            case .Ok(m);
-                e.target_meta = m;
-                e.target_ok = true;
-            else;
+        case .Ok(m);
+            e.target_meta = m;
+            e.target_ok = true;
+        else;
         }
         if dereference && e.target_ok {
             // eza keeps the link's type and look, with its target's details.
@@ -145,19 +145,19 @@ entry_stat :: (e: *Entry, dereference: bool = false) {
 entry_class :: (e: *const Entry) -> File_Class {
     if !e.stat_ok return .Normal;
     if e.meta.kind == {
-        case .Directory;
-            return .Directory;
-        case .Symlink;
-            return ifx e.target_ok File_Class.Symlink else File_Class.Broken_Link;
-        case .Fifo;
-            return .Pipe;
-        case .Socket;
-            return .Socket;
-        case .Block_Device;
-            return .Block_Device;
-        case .Character_Device;
-            return .Char_Device;
-        else;
+    case .Directory;
+        return .Directory;
+    case .Symlink;
+        return ifx e.target_ok File_Class.Symlink else File_Class.Broken_Link;
+    case .Fifo;
+        return .Pipe;
+    case .Socket;
+        return .Socket;
+    case .Block_Device;
+        return .Block_Device;
+    case .Character_Device;
+        return .Char_Device;
+    else;
     }
     if is_executable(e.meta) return .Executable;
     class := classify_name(e.name);
@@ -193,15 +193,15 @@ entry_style :: (e: *const Entry) -> Terminal_Style {
 classify_suffix :: (e: *const Entry) -> str {
     if !e.stat_ok return "";
     if e.meta.kind == {
-        case .Directory;
-            return "/";
-        case .Symlink;
-            return "@";
-        case .Fifo;
-            return "|";
-        case .Socket;
-            return "=";
-        else;
+    case .Directory;
+        return "/";
+    case .Symlink;
+        return "@";
+    case .Fifo;
+        return "|";
+    case .Socket;
+        return "=";
+    else;
     }
     if is_executable(e.meta) return "*";
     return "";
@@ -319,39 +319,39 @@ entry_size :: (e: *const Entry) -> s64 {
 
 #public compare_field :: (field: Sort_Field, a: Entry, b: Entry) -> Ordering {
     if field == {
-        case .Name;
-            return natural_compare(a.name, b.name, true);
-        case .Name_Case;
-            return natural_compare(a.name, b.name, false);
-        case .Extension, .Extension_Case;
-            // Directories have no extension.
-            ea := ifx a.is_dir "" else extension_of(a.name);
-            eb := ifx b.is_dir "" else extension_of(b.name);
-            if ea != eb {
-                if ea.count == 0 return .Less;
-                if eb.count == 0 return .Greater;
-                return ea <=> eb;
-            }
-            return natural_compare(a.name, b.name, field == .Extension);
-        case .Size;
-            return entry_size(&a) <=> entry_size(&b);
-        case .Type;
-            ka := type_rank(a);
-            kb := type_rank(b);
-            if ka != kb return ka <=> kb;
-            return natural_compare(a.name, b.name, false);
-        case .Modified;
-            return time_order(a.meta.modified, b.meta.modified);
-        case .Accessed;
-            return time_order(a.meta.accessed, b.meta.accessed);
-        case .Created;
-            return time_order(a.meta.created, b.meta.created);
-        case .Changed;
-            return time_order(a.meta.changed, b.meta.changed);
-        case .Inode;
-            return a.meta.file_id.low <=> b.meta.file_id.low;
-        case .None;
-            return .Equal;
+    case .Name;
+        return natural_compare(a.name, b.name, true);
+    case .Name_Case;
+        return natural_compare(a.name, b.name, false);
+    case .Extension, .Extension_Case;
+        // Directories have no extension.
+        ea := ifx a.is_dir "" else extension_of(a.name);
+        eb := ifx b.is_dir "" else extension_of(b.name);
+        if ea != eb {
+            if ea.count == 0 return .Less;
+            if eb.count == 0 return .Greater;
+            return ea <=> eb;
+        }
+        return natural_compare(a.name, b.name, field == .Extension);
+    case .Size;
+        return entry_size(&a) <=> entry_size(&b);
+    case .Type;
+        ka := type_rank(a);
+        kb := type_rank(b);
+        if ka != kb return ka <=> kb;
+        return natural_compare(a.name, b.name, false);
+    case .Modified;
+        return time_order(a.meta.modified, b.meta.modified);
+    case .Accessed;
+        return time_order(a.meta.accessed, b.meta.accessed);
+    case .Created;
+        return time_order(a.meta.created, b.meta.created);
+    case .Changed;
+        return time_order(a.meta.changed, b.meta.changed);
+    case .Inode;
+        return a.meta.file_id.low <=> b.meta.file_id.low;
+    case .None;
+        return .Equal;
     }
 }
 
@@ -365,21 +365,21 @@ time_order :: (a: File_Timestamp, b: File_Timestamp) -> Ordering {
 type_rank :: (e: Entry) -> s64 {
     if !e.stat_ok return 1;
     if e.meta.kind == {
-        case .Directory;
-            return 0;
-        case .Regular;
-            return 1;
-        case .Symlink;
-            return 2;
-        case .Fifo;
-            return 3;
-        case .Socket;
-            return 4;
-        case .Character_Device;
-            return 5;
-        case .Block_Device;
-            return 6;
-        else;
-            return 7;
+    case .Directory;
+        return 0;
+    case .Regular;
+        return 1;
+    case .Symlink;
+        return 2;
+    case .Fifo;
+        return 3;
+    case .Socket;
+        return 4;
+    case .Character_Device;
+        return 5;
+    case .Block_Device;
+        return 6;
+    else;
+        return 7;
     }
 }

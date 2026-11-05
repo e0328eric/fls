@@ -483,18 +483,18 @@ local_date :: (seconds: s64, nanos: u32 = 0) -> (Date_Time, s64) {
         #push_allocator(heap_allocator());
         local_zone_state = 2;
         if timezone_load_local() == {
-            case .Ok(zone);
-                local_zone = zone;
-                local_zone_state = 1;
-            else;
+        case .Ok(zone);
+            local_zone = zone;
+            local_zone_state = 1;
+        else;
         }
     }
     stamp := Unix_Timestamp.{ seconds, nanos };
     if local_zone_state == 1 {
         if local_zone.to_local(stamp) == {
-            case .Ok(zoned);
-                return zoned.value, cast(s64) zoned.offset.seconds;
-            else;
+        case .Ok(zoned);
+            return zoned.value, cast(s64) zoned.offset.seconds;
+        else;
         }
     }
     return stamp.to_date_time().unwrap_or(.{}), 0;
@@ -506,53 +506,47 @@ format_time :: (seconds: s64, nanos: u32, style: Time_Style) -> str {
     d := dt.date;
     t := dt.time;
     if style == {
-        case .Default;
-            now_dt, _ := local_date(current_time());
-            month := MONTHS[(cast(ssize) d.month - 1).clamp(0, 11)];
-            if d.year == now_dt.date.year {
-                return tprint("{} {} {}:{}", pad2s(d.day), month, pad2(t.hour), pad2(t.minute));
-            }
-            return tprint("{} {}  {}", pad2s(d.day), month, d.year);
-        case .Iso;
-            now_dt, _ := local_date(current_time());
-            if d.year == now_dt.date.year {
-                return tprint(
-                    "{}-{} {}:{}",
-                    pad2(d.month),
-                    pad2(d.day),
-                    pad2(t.hour),
-                    pad2(t.minute)
-                );
-            }
-            return tprint("{}-{}-{}", d.year, pad2(d.month), pad2(d.day));
-        case .Long_Iso;
-            return tprint(
-                "{}-{}-{} {}:{}",
-                d.year,
-                pad2(d.month),
-                pad2(d.day),
-                pad2(t.hour),
-                pad2(t.minute)
-            );
-        case .Full_Iso;
-            sign := ifx offset < 0 "-" else "+";
-            off := offset;
-            if off < 0 off = -off;
-            return tprint(
-                "{}-{}-{} {}:{}:{}.{} {}{}{}",
-                d.year,
-                pad2(d.month),
-                pad2(d.day),
-                pad2(t.hour),
-                pad2(t.minute),
-                pad2(t.second),
-                pad9(t.nanosecond),
-                sign,
-                pad2(cast(u8)(off / 3600)),
-                pad2(cast(u8)((off / 60) % 60))
-            );
-        case .Relative;
-            return relative_time(current_time() - seconds);
+    case .Default;
+        now_dt, _ := local_date(current_time());
+        month := MONTHS[(cast(ssize) d.month - 1).clamp(0, 11)];
+        if d.year == now_dt.date.year {
+            return tprint("{} {} {}:{}", pad2s(d.day), month, pad2(t.hour), pad2(t.minute));
+        }
+        return tprint("{} {}  {}", pad2s(d.day), month, d.year);
+    case .Iso;
+        now_dt, _ := local_date(current_time());
+        if d.year == now_dt.date.year {
+            return tprint("{}-{} {}:{}", pad2(d.month), pad2(d.day), pad2(t.hour), pad2(t.minute));
+        }
+        return tprint("{}-{}-{}", d.year, pad2(d.month), pad2(d.day));
+    case .Long_Iso;
+        return tprint(
+            "{}-{}-{} {}:{}",
+            d.year,
+            pad2(d.month),
+            pad2(d.day),
+            pad2(t.hour),
+            pad2(t.minute)
+        );
+    case .Full_Iso;
+        sign := ifx offset < 0 "-" else "+";
+        off := offset;
+        if off < 0 off = -off;
+        return tprint(
+            "{}-{}-{} {}:{}:{}.{} {}{}{}",
+            d.year,
+            pad2(d.month),
+            pad2(d.day),
+            pad2(t.hour),
+            pad2(t.minute),
+            pad2(t.second),
+            pad9(t.nanosecond),
+            sign,
+            pad2(cast(u8)(off / 3600)),
+            pad2(cast(u8)((off / 60) % 60))
+        );
+    case .Relative;
+        return relative_time(current_time() - seconds);
     }
 }
 

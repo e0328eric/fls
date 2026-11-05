@@ -250,93 +250,93 @@ short_takes_value :: (c: u8) -> bool {
 
 long_takes_value :: (name: str) -> bool {
     if name == {
-        case "level", "sort", "ignore-glob", "time", "width", "time-style", "cd-file", "keys";
-            return true;
-        else;
-            return false;
+    case "level", "sort", "ignore-glob", "time", "width", "time-style", "cd-file", "keys";
+        return true;
+    else;
+        return false;
     }
 }
 
 apply_short :: (o: *Options, c: u8) -> Parse_Result {
     if c == {
-        case #char "1";
-            o.layout = .Oneline;
-            o.layout_forced = true;
-        case #char "G";
-            o.layout = .Grid;
-            o.layout_forced = true;
-        case #char "l";
-            o.layout = .Long;
-        case #char "x";
-            o.across = true;
-        case #char "R";
-            o.recurse = true;
-        case #char "T";
-            o.tree = true;
-        case #char "F";
-            o.classify = .Always;
-        case #char "a";
-            o.filter.all += 1;
-        case #char "A";
-            if o.filter.all == 0 o.filter.all = 1;
-        case #char "d";
-            o.list_dirs = true;
-        case #char "D";
-            o.filter.only_dirs = true;
-        case #char "f";
-            o.filter.only_files = true;
-        case #char "r";
-            o.sort.reverse = true;
-        case #char "X";
-            o.filter.dereference = true;
-        case #char "b";
-            o.size_format = .Binary;
-        case #char "B";
-            o.size_format = .Bytes;
-        case #char "g";
-            o.group = true;
-        case #char "h";
-            o.header = true;
-        case #char "H";
-            o.links = true;
-        case #char "i";
-            o.inode = true;
-        case #char "S";
-            o.blocksize = true;
-        case #char "n";
-            o.numeric = true;
-        case #char "o";
-            o.octal = true;
-        case #char "m";
-            o.time_modified = true;
-        case #char "u";
-            o.time_accessed = true;
-        case #char "U";
-            o.time_created = true;
-        case #char "?";
-            o.help = true;
-        case #char "v";
-            o.version = true;
-        else;
-            return fail(tprint("unknown option '-{c}'", c));
+    case #char "1";
+        o.layout = .Oneline;
+        o.layout_forced = true;
+    case #char "G";
+        o.layout = .Grid;
+        o.layout_forced = true;
+    case #char "l";
+        o.layout = .Long;
+    case #char "x";
+        o.across = true;
+    case #char "R";
+        o.recurse = true;
+    case #char "T";
+        o.tree = true;
+    case #char "F";
+        o.classify = .Always;
+    case #char "a";
+        o.filter.all += 1;
+    case #char "A";
+        if o.filter.all == 0 o.filter.all = 1;
+    case #char "d";
+        o.list_dirs = true;
+    case #char "D";
+        o.filter.only_dirs = true;
+    case #char "f";
+        o.filter.only_files = true;
+    case #char "r";
+        o.sort.reverse = true;
+    case #char "X";
+        o.filter.dereference = true;
+    case #char "b";
+        o.size_format = .Binary;
+    case #char "B";
+        o.size_format = .Bytes;
+    case #char "g";
+        o.group = true;
+    case #char "h";
+        o.header = true;
+    case #char "H";
+        o.links = true;
+    case #char "i";
+        o.inode = true;
+    case #char "S";
+        o.blocksize = true;
+    case #char "n";
+        o.numeric = true;
+    case #char "o";
+        o.octal = true;
+    case #char "m";
+        o.time_modified = true;
+    case #char "u";
+        o.time_accessed = true;
+    case #char "U";
+        o.time_created = true;
+    case #char "?";
+        o.help = true;
+    case #char "v";
+        o.version = true;
+    else;
+        return fail(tprint("unknown option '-{c}'", c));
     }
     return .{};
 }
 
 apply_value :: (o: *Options, c: u8, value: str) -> Parse_Result {
     if c == {
-        case #char "L";
-            return apply_long(o, "level", value, true);
-        case #char "s";
-            return apply_long(o, "sort", value, true);
-        case #char "I";
-            return apply_long(o, "ignore-glob", value, true);
-        case #char "t";
-            return apply_long(o, "time", value, true);
-        case #char "w";
-            return apply_long(o, "width", value, true);
-        else;
-            return fail(tprint("unknown option '-{c}'", c));
+    case #char "L";
+        return apply_long(o, "level", value, true);
+    case #char "s";
+        return apply_long(o, "sort", value, true);
+    case #char "I";
+        return apply_long(o, "ignore-glob", value, true);
+    case #char "t";
+        return apply_long(o, "time", value, true);
+    case #char "w";
+        return apply_long(o, "width", value, true);
+    else;
+        return fail(tprint("unknown option '-{c}'", c));
     }
 }
 
@@ -346,208 +346,208 @@ parse_when :: (value: str, has_value: bool, out: *When) -> bool {
         return true;
     }
     if value == {
-        case "always", "yes", "force";
-            out.* = .Always;
-        case "auto", "tty", "if-tty", "automatic";
-            out.* = .Auto;
-        case "never", "no", "none";
-            out.* = .Never;
-        else;
-            return false;
+    case "always", "yes", "force";
+        out.* = .Always;
+    case "auto", "tty", "if-tty", "automatic";
+        out.* = .Auto;
+    case "never", "no", "none";
+        out.* = .Never;
+    else;
+        return false;
     }
     return true;
 }
 
 apply_long :: (o: *Options, name: str, value: str, has_value: bool) -> Parse_Result {
     if name == {
-        case "help";
-            o.help = true;
-        case "version";
-            o.version = true;
-        case "tui";
-            o.tui = true;
-        case "cd-file";
-            o.cd_file = value;
-        case "snapshot";
-            o.snapshot = true;
-        case "keys";
-            o.keys = value;
-        case "lol";
-            if !has_value o.lol = .Trap;
-            else if value == "signal" o.lol = .Signal;
-            else return fail(tprint("bad value '{}' for --lol", value));
-        case "oneline";
-            o.layout = .Oneline;
-            o.layout_forced = true;
-        case "grid";
-            o.layout = .Grid;
-            o.layout_forced = true;
-        case "long";
-            o.layout = .Long;
-        case "across";
-            o.across = true;
-        case "recurse";
-            o.recurse = true;
-        case "tree";
-            o.tree = true;
-        case "classify";
-            if !parse_when(value, has_value, &o.classify) return fail(
-                tprint("bad value '{}' for --classify", value)
-            );
-        case "color", "colour";
-            if !parse_when(value, has_value, &o.color) return fail(
-                tprint("bad value '{}' for --color", value)
-            );
-        case "icons";
-            if !has_value o.icons = .Auto;
-            else if !parse_when(value, has_value, &o.icons) return fail(
-                tprint("bad value '{}' for --icons", value)
-            );
-        case "no-icons";
-            o.icons = .Never;
-        case "hyperlink";
-            if !has_value o.hyperlink = .Auto;
-            else if !parse_when(value, has_value, &o.hyperlink) return fail(
-                tprint("bad value '{}' for --hyperlink", value)
-            );
-        case "no-quotes";
-            o.quotes = false;
-        case "absolute";
-            o.absolute = true;
-        case "all";
-            o.filter.all += 1;
-        case "almost-all";
-            if o.filter.all == 0 o.filter.all = 1;
-        case "list-dirs";
-            o.list_dirs = true;
-        case "only-dirs";
-            o.filter.only_dirs = true;
-        case "only-files";
-            o.filter.only_files = true;
-        case "reverse";
-            o.sort.reverse = true;
-        case "dereference";
-            o.filter.dereference = true;
-        case "group-directories-first";
-            o.sort.grouping = .First;
-        case "group-directories-last";
-            o.sort.grouping = .Last;
-        case "binary";
-            o.size_format = .Binary;
-        case "bytes";
-            o.size_format = .Bytes;
-        case "group";
-            o.group = true;
-        case "header";
-            o.header = true;
-        case "links";
-            o.links = true;
-        case "inode";
-            o.inode = true;
-        case "blocksize", "blocks";
-            o.blocksize = true;
-        case "numeric";
-            o.numeric = true;
-        case "octal-permissions", "octal";
-            o.octal = true;
-        case "modified";
+    case "help";
+        o.help = true;
+    case "version";
+        o.version = true;
+    case "tui";
+        o.tui = true;
+    case "cd-file";
+        o.cd_file = value;
+    case "snapshot";
+        o.snapshot = true;
+    case "keys";
+        o.keys = value;
+    case "lol";
+        if !has_value o.lol = .Trap;
+        else if value == "signal" o.lol = .Signal;
+        else return fail(tprint("bad value '{}' for --lol", value));
+    case "oneline";
+        o.layout = .Oneline;
+        o.layout_forced = true;
+    case "grid";
+        o.layout = .Grid;
+        o.layout_forced = true;
+    case "long";
+        o.layout = .Long;
+    case "across";
+        o.across = true;
+    case "recurse";
+        o.recurse = true;
+    case "tree";
+        o.tree = true;
+    case "classify";
+        if !parse_when(value, has_value, &o.classify) return fail(
+            tprint("bad value '{}' for --classify", value)
+        );
+    case "color", "colour";
+        if !parse_when(value, has_value, &o.color) return fail(
+            tprint("bad value '{}' for --color", value)
+        );
+    case "icons";
+        if !has_value o.icons = .Auto;
+        else if !parse_when(value, has_value, &o.icons) return fail(
+            tprint("bad value '{}' for --icons", value)
+        );
+    case "no-icons";
+        o.icons = .Never;
+    case "hyperlink";
+        if !has_value o.hyperlink = .Auto;
+        else if !parse_when(value, has_value, &o.hyperlink) return fail(
+            tprint("bad value '{}' for --hyperlink", value)
+        );
+    case "no-quotes";
+        o.quotes = false;
+    case "absolute";
+        o.absolute = true;
+    case "all";
+        o.filter.all += 1;
+    case "almost-all";
+        if o.filter.all == 0 o.filter.all = 1;
+    case "list-dirs";
+        o.list_dirs = true;
+    case "only-dirs";
+        o.filter.only_dirs = true;
+    case "only-files";
+        o.filter.only_files = true;
+    case "reverse";
+        o.sort.reverse = true;
+    case "dereference";
+        o.filter.dereference = true;
+    case "group-directories-first";
+        o.sort.grouping = .First;
+    case "group-directories-last";
+        o.sort.grouping = .Last;
+    case "binary";
+        o.size_format = .Binary;
+    case "bytes";
+        o.size_format = .Bytes;
+    case "group";
+        o.group = true;
+    case "header";
+        o.header = true;
+    case "links";
+        o.links = true;
+    case "inode";
+        o.inode = true;
+    case "blocksize", "blocks";
+        o.blocksize = true;
+    case "numeric";
+        o.numeric = true;
+    case "octal-permissions", "octal";
+        o.octal = true;
+    case "modified";
+        o.time_modified = true;
+    case "accessed";
+        o.time_accessed = true;
+    case "created";
+        o.time_created = true;
+    case "changed";
+        o.time_changed = true;
+    case "total-size";
+        o.total_size = true;
+    case "git";
+        o.git = true;
+    case "no-git";
+        o.git = false;
+    case "no-permissions";
+        o.no_permissions = true;
+    case "no-filesize";
+        o.no_filesize = true;
+    case "no-user";
+        o.no_user = true;
+    case "no-time";
+        o.no_time = true;
+    case "level";
+        #pattern ?n := from_string(s64, value) else {
+            return fail(tprint("--level needs a number, not '{}'", value));
+        };
+        o.level = n;
+    case "width";
+        #pattern ?n := from_string(s64, value) else {
+            return fail(tprint("--width needs a number, not '{}'", value));
+        };
+        o.width = n;
+    case "ignore-glob";
+        parts := value.split("|");
+        defer parts.free();
+        for p: parts if p.count > 0 o.filter.ignore.push(p);
+    case "time";
+        if value == {
+        case "modified", "mod";
             o.time_modified = true;
-        case "accessed";
+        case "accessed", "acc";
             o.time_accessed = true;
-        case "created";
+        case "created", "cr";
             o.time_created = true;
-        case "changed";
+        case "changed", "ch";
             o.time_changed = true;
-        case "total-size";
-            o.total_size = true;
-        case "git";
-            o.git = true;
-        case "no-git";
-            o.git = false;
-        case "no-permissions";
-            o.no_permissions = true;
-        case "no-filesize";
-            o.no_filesize = true;
-        case "no-user";
-            o.no_user = true;
-        case "no-time";
-            o.no_time = true;
-        case "level";
-            #pattern ?n := from_string(s64, value) else {
-                return fail(tprint("--level needs a number, not '{}'", value));
-            };
-            o.level = n;
-        case "width";
-            #pattern ?n := from_string(s64, value) else {
-                return fail(tprint("--width needs a number, not '{}'", value));
-            };
-            o.width = n;
-        case "ignore-glob";
-            parts := value.split("|");
-            defer parts.free();
-            for p: parts if p.count > 0 o.filter.ignore.push(p);
-        case "time";
-            if value == {
-                case "modified", "mod";
-                    o.time_modified = true;
-                case "accessed", "acc";
-                    o.time_accessed = true;
-                case "created", "cr";
-                    o.time_created = true;
-                case "changed", "ch";
-                    o.time_changed = true;
-                else;
-                    return fail(tprint("bad value '{}' for --time", value));
-            }
-        case "time-style";
-            if value == {
-                case "default";
-                    o.time_style = .Default;
-                case "iso";
-                    o.time_style = .Iso;
-                case "long-iso";
-                    o.time_style = .Long_Iso;
-                case "full-iso";
-                    o.time_style = .Full_Iso;
-                case "relative";
-                    o.time_style = .Relative;
-                else;
-                    return fail(tprint("bad value '{}' for --time-style", value));
-            }
-        case "sort";
-            if value == {
-                case "name", "filename";
-                    o.sort.field = .Name;
-                case "Name", "Filename";
-                    o.sort.field = .Name_Case;
-                case "extension", "ext";
-                    o.sort.field = .Extension;
-                case "Extension", "Ext";
-                    o.sort.field = .Extension_Case;
-                case "size", "filesize";
-                    o.sort.field = .Size;
-                case "type";
-                    o.sort.field = .Type;
-                case "modified", "date", "time", "mod", "old", "oldest";
-                    o.sort.field = .Modified;
-                case "newest", "new";
-                    o.sort.field = .Modified;
-                    o.sort.reverse = !o.sort.reverse;
-                case "accessed", "acc";
-                    o.sort.field = .Accessed;
-                case "created", "cr";
-                    o.sort.field = .Created;
-                case "changed", "ch";
-                    o.sort.field = .Changed;
-                case "inode";
-                    o.sort.field = .Inode;
-                case "none";
-                    o.sort.field = .None;
-                else;
-                    return fail(tprint("bad value '{}' for --sort", value));
-            }
         else;
-            return fail(tprint("unknown option '--{}'", name));
+            return fail(tprint("bad value '{}' for --time", value));
+        }
+    case "time-style";
+        if value == {
+        case "default";
+            o.time_style = .Default;
+        case "iso";
+            o.time_style = .Iso;
+        case "long-iso";
+            o.time_style = .Long_Iso;
+        case "full-iso";
+            o.time_style = .Full_Iso;
+        case "relative";
+            o.time_style = .Relative;
+        else;
+            return fail(tprint("bad value '{}' for --time-style", value));
+        }
+    case "sort";
+        if value == {
+        case "name", "filename";
+            o.sort.field = .Name;
+        case "Name", "Filename";
+            o.sort.field = .Name_Case;
+        case "extension", "ext";
+            o.sort.field = .Extension;
+        case "Extension", "Ext";
+            o.sort.field = .Extension_Case;
+        case "size", "filesize";
+            o.sort.field = .Size;
+        case "type";
+            o.sort.field = .Type;
+        case "modified", "date", "time", "mod", "old", "oldest";
+            o.sort.field = .Modified;
+        case "newest", "new";
+            o.sort.field = .Modified;
+            o.sort.reverse = !o.sort.reverse;
+        case "accessed", "acc";
+            o.sort.field = .Accessed;
+        case "created", "cr";
+            o.sort.field = .Created;
+        case "changed", "ch";
+            o.sort.field = .Changed;
+        case "inode";
+            o.sort.field = .Inode;
+        case "none";
+            o.sort.field = .None;
+        else;
+            return fail(tprint("bad value '{}' for --sort", value));
+        }
+    else;
+        return fail(tprint("unknown option '--{}'", name));
     }
     return .{};
 }

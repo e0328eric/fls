@@ -16,11 +16,11 @@
     profile.set_options(options);
 
     if compile_file(tprint("{}/main.glo", directory), profile) == {
-        case .Ok(log);
-            print("{}", log);
-        case .Err(error);
-            print("{}\n", error.message);
-            exit(error.status);
+    case .Ok(log);
+        print("{}", log);
+    case .Err(error);
+        print("{}\n", error.message);
+        exit(error.status);
     }
     print("fls: {}/build/fls\n", directory);
 }

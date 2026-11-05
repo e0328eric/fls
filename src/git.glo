@@ -64,21 +64,21 @@ git_repo_for :: (directory: str) -> ?*Git_Repo {
         .capture_and_return_output = true
     );
     if top == {
-        case .Err;
+    case .Err;
+        not_repos.push(absolute_dir.clone());
+        return null;
+    case .Ok(output);
+        defer output.free();
+        if !output.status.exited || output.status.code != 0 {
             not_repos.push(absolute_dir.clone());
             return null;
-        case .Ok(output);
-            defer output.free();
-            if !output.status.exited || output.status.code != 0 {
-                not_repos.push(absolute_dir.clone());
-                return null;
-            }
-            root := output.output_string.trim();
-            repo: Git_Repo;
-            repo.root = canonical(root).unwrap_or(root.clone());
-            load_status(&repo);
-            repos.push(repo);
-            return &repos[repos.count - 1];
+        }
+        root := output.output_string.trim();
+        repo: Git_Repo;
+        repo.root = canonical(root).unwrap_or(root.clone());
+        load_status(&repo);
+        repos.push(repo);
+        return &repos[repos.count - 1];
     }
 }
 
@@ -136,7 +136,7 @@ load_status :: (repo: *Git_Repo) {
         "--untracked-files=normal",
         .capture_and_return_output = true
     );
-    #pattern.Ok(output) := status else {
+    #pattern .Ok(output) := status else {
         return;
     };
     defer output.free();
@@ -163,47 +163,47 @@ load_status :: (repo: *Git_Repo) {
 /// Maps porcelain codes to eza's letters.
 letter :: (code: u8, staged: bool) -> u8 {
     if code == {
-        case #char " ";
-            return #char "-";
-        case #char "M";
-            return #char "M";
-        case #char "T";
-            return #char "T";
-        case #char "A";
-            return #char "N";
-        case #char "D";
-            return #char "D";
-        case #char "R", #char "C";
-            return #char "R";
-        case #char "U";
-            return #char "U";
-        case #char "?";
-            return ifx staged #char "-" else #char "N";
-        case #char "!";
-            return ifx staged #char "-" else #char "I";
-        else;
-            return #char "-";
+    case #char " ";
+        return #char "-";
+    case #char "M";
+        return #char "M";
+    case #char "T";
+        return #char "T";
+    case #char "A";
+        return #char "N";
+    case #char "D";
+        return #char "D";
+    case #char "R", #char "C";
+        return #char "R";
+    case #char "U";
+        return #char "U";
+    case #char "?";
+        return ifx staged #char "-" else #char "N";
+    case #char "!";
+        return ifx staged #char "-" else #char "I";
+    else;
+        return #char "-";
     }
 }
 
 rank :: (c: u8) -> s64 {
     if c == {
-        case #char "U";
-            return 8;
-        case #char "D";
-            return 7;
-        case #char "M";
-            return 6;
-        case #char "R";
-            return 5;
-        case #char "T";
-            return 4;
-        case #char "N";
-            return 3;
-        case #char "I";
-            return 1;
-        else;
-            return 0;
+    case #char "U";
+        return 8;
+    case #char "D";
+        return 7;
+    case #char "M";
+        return 6;
+    case #char "R";
+        return 5;
+    case #char "T";
+        return 4;
+    case #char "N";
+        return 3;
+    case #char "I";
+        return 1;
+    else;
+        return 0;
     }
 }
 
