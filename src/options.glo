@@ -169,6 +169,10 @@ usage_text :: () -> str {
         \\      --no-user            hide the user column
         \\      --no-time            hide the time column
         \\
+        \\FUNNY OPTIONS
+        \\      --lol                airport simulation
+        \\      --lol=signal         airport simulation with Ctrl-C to close
+        \\
         \\ENVIRONMENT
         \\  LS_COLORS, EZA_COLORS    color overrides; NO_COLOR disables automatic color
         \\  COLUMNS                  terminal width when it cannot be detected
