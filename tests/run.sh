@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Runs every fls test: unit tests, the TUI script and (when eza is installed)
+# Runs every fls test: unit tests, the TUI and --lol scripts and (when eza is installed)
 # the eza comparison on this repository and a few system directories.
 set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -7,6 +7,7 @@ GLOSSO="${GLOSSO:-glosso}"
 status=0
 "$GLOSSO" --run -o "$ROOT/build/unit_test" "$ROOT/tests/unit_test.glo" 2>&1 | grep -v '^glosso:' || status=1
 "$ROOT/tests/tui_test.sh" || status=1
+python3 -I "$ROOT/tests/lol_test.py" || status=1
 if command -v eza >/dev/null; then
     "$ROOT/tests/compare_kinds.sh" || status=1
     for dir in "$ROOT" "$ROOT/src" /etc; do

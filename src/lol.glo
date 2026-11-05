@@ -1,0 +1,598 @@
+//! fls/src/lol.glo - `fls --lol`: an airliner rolls down a runway and takes
+//! off across the terminal, the way `sl` drives a train across it.
+//!
+//! Plain `--lol` cannot be stopped: the terminal is in raw mode, so Ctrl-C and
+//! Ctrl-D arrive as ordinary bytes and are thrown away, and SIGINT itself is
+//! ignored until the plane is gone. `--lol=signal` installs no handler and lets
+//! Ctrl-C or Ctrl-D end the show early, restoring the terminal and exiting 0.
+
+#import "Io";
+#import "Format";
+#import "Strings";
+#import "String_Builder";
+#import "Context";
+#import "Terminal";
+#import "Time";
+#import "Math/Core";
+#import "File_System/File";
+#import "Process/Signals";
+#import "Random";
+#import "options.glo";
+
+#public {
+
+/// Plays the takeoff in the terminal. With `snapshot`, prints every frame as
+/// text instead, `width` columns wide (100 by default), for tests.
+run_lol :: (mode: Lol_Mode, snapshot: bool, width: s64) -> s32 {
+    if snapshot return lol_snapshot(ifx width > 0 cast(ssize) width else 100, 30);
+    return lol_play(mode);
+}
+
+}
+
+// ---------------------------------------------------------------------------
+// Artwork. Spaces inside a row of the plane are opaque, so the tower and the
+// clouds do not show through the fuselage; the landing gear rows are not.
+
+PLANE_ART :: #string
+    \\                            _*_
+    \\                           |fls\
+    \\     ______________________|    \
+    \\   _/ [_][_] o o o o o o o o o  |
+    \\  (____________________________/
+    \\         (_____>\_______/  \__/
+    \\            |          |
+    \\           (O)       (O)(O)
+;
+
+PLANE_WIDTH :: 33;
+PLANE_HEIGHT :: 8;
+/// The row with the cabin windows, and the row with the engine and wing.
+WINDOW_ROW :: 3;
+ENGINE_ROW :: 5;
+/// The first of the two landing gear rows.
+GEAR_ROW :: 6;
+/// Where the engine exhaust and the main wheels are, inside the art.
+NOZZLE_X :: 16;
+NOZZLE_Y :: 5;
+WHEELS_X :: 27;
+
+TOWER_ART :: #string
+    \\ ______
+    \\/______\
+    \\|[][][]|
+    \\\______/
+    \\  |  |
+    \\  |[]|
+    \\__|__|__
+;
+
+TOWER_WIDTH :: 8;
+/// Columns between the tower and the right edge of the screen.
+TOWER_MARGIN :: 2;
+
+CLOUD_ART :: #string
+    \\    .--.
+    \\ .-(    )-.
+    \\(__________)
+;
+
+CLOUD_SMALL_ART :: #string
+    \\   .--.
+    \\ _(    )_
+    \\(________)
+;
+
+CLOUD_WIDTH :: 12;
+
+// ---------------------------------------------------------------------------
+// Timing, in frames of FRAME_MS.
+
+FRAME_MS :: 40;
+/// Engines spooling up before the brakes come off.
+SPOOL_FRAMES :: 35;
+/// Empty sky after the plane is gone, while the exhaust clears.
+GONE_FRAMES :: 20;
+/// After liftoff: frames until the gear starts up, and until it is stowed.
+GEAR_HALF_FRAMES :: 10;
+GEAR_UP_FRAMES :: 16;
+/// Bounds on the climb, in rows per column flown, which is reached over
+/// CLIMB_FRAMES after liftoff.
+CLIMB_MIN :: 0.2;
+CLIMB_MAX :: 0.5;
+CLIMB_FRAMES :: 5.0;
+/// A guard against a scene that never ends.
+MAX_FRAMES :: 3000;
+
+Phase :: enum {
+    Spool;
+    Roll;
+    Climb;
+    Gone;
+}
+
+/// One particle of exhaust, or of dust thrown up by the wheels.
+Puff :: struct {
+    x: f64;
+    y: f64;
+    vx: f64;
+    vy: f64;
+    age: s64;
+    life: s64;
+    dust: bool;
+}
+
+Cloud :: struct {
+    x: f64;
+    y: ssize;
+    speed: f64;
+    small: bool;
+}
+
+Scene :: struct {
+    width: ssize;
+    height: ssize;
+    plane: [..]str;
+    tower: [..]str;
+    cloud: [..]str;
+    cloud_small: [..]str;
+
+    frame: s64;
+    phase: Phase;
+    phase_frame: s64;
+    /// The plane's left column and its height above the runway, in rows.
+    x: f64;
+    altitude: f64;
+    /// Ground speed in columns per frame (the plane flies leftwards).
+    speed: f64;
+    accel: f64;
+    liftoff_x: f64;
+    climb: f64;
+    /// The climb the plane rotates to, chosen at liftoff.
+    climb_target: f64;
+    /// 2 = down, 1 = retracting, 0 = stowed.
+    gear: s64 = 2;
+    puffs: [..]Puff;
+    clouds: [3]Cloud;
+    /// Seeded by `scene_init` with RNG_SEED, so every takeoff looks the same.
+    rng: Xoshiro256_Star_Star;
+    done: bool;
+}
+
+RNG_SEED :: 16#9e37_79b9_7f4a_7c15;
+
+scene_free :: (scene: *Scene) {
+    scene.plane.free();
+    scene.tower.free();
+    scene.cloud.free();
+    scene.cloud_small.free();
+    scene.puffs.free();
+}
+
+/// A uniform random number in [0, 1) from the scene's generator.
+random :: (scene: *Scene) -> f64 {
+    // A deterministic engine cannot fail; the error is only part of the API.
+    #pattern.Ok(value) := random_f64(.generator = scene.rng.generator()) else {
+        return 0.0;
+    };
+    return value;
+}
+
+to_cell :: (value: f64) -> ssize {
+    return cast(ssize) floor(value + 0.5);
+}
+
+/// The row the runway surface is drawn on.
+ground_row :: (scene: *Scene) -> ssize {
+    return scene.height - 3;
+}
+
+/// The screen row of the plane's top line.
+plane_top :: (scene: *Scene) -> f64 {
+    return cast(f64)(ground_row(scene) - PLANE_HEIGHT) - scene.altitude;
+}
+
+/// Sets the scene up for a `width` by `height` screen: the plane parked at the
+/// right, ready to roll, and a takeoff run that fits the width.
+scene_init :: (scene: *Scene, width: ssize, height: ssize) {
+    scene.width = width;
+    scene.height = height;
+    scene.plane = PLANE_ART.split("\n");
+    scene.tower = TOWER_ART.split("\n");
+    scene.cloud = CLOUD_ART.split("\n");
+    scene.cloud_small = CLOUD_SMALL_ART.split("\n");
+    scene.rng = Xoshiro256_Star_Star.xoshiro256ss(RNG_SEED);
+
+    // The plane waits just left of the control tower (on a narrow screen, in
+    // front of it), and its wheels leave the runway a third of the way from
+    // there to the left edge, so most of the trip is the climb-out.
+    w := cast(f64) width;
+    start := w - cast(f64)(PLANE_WIDTH + TOWER_WIDTH + TOWER_MARGIN + 3);
+    if start < w * 0.4 start = w * 0.4;
+    distance := start / 3.0;
+    // A short, brisk run, so the roll takes about a third of the time
+    // between brakes off and the plane leaving the screen, or less.
+    frames := distance * 0.6;
+    if frames < 14.0 frames = 14.0;
+    if frames > 28.0 frames = 28.0;
+    scene.x = start;
+    scene.liftoff_x = start - distance;
+    scene.accel = 2.0 * distance / (frames * frames);
+
+    sky := ground_row(scene) - PLANE_HEIGHT - 3;
+    if sky < 2 sky = 2;
+    for i: 0..3 {
+        cloud := &scene.clouds[i];
+        cloud.x = w * (0.1 + 0.32 * i.cast(f64)) + random(scene) * 8.0;
+        cloud.y = 1 + cast(ssize)(random(scene) * sky.cast(f64));
+        cloud.speed = 0.04 + random(scene) * 0.08;
+        cloud.small = i == 1;
+    }
+}
+
+emit_exhaust :: (scene: *Scene, count: s64) {
+    top := plane_top(scene);
+    for i: 0..count {
+        puff: Puff;
+        puff.x = scene.x + cast(f64) NOZZLE_X + random(scene) * 0.8;
+        puff.y = top + cast(f64) NOZZLE_Y + (random(scene) - 0.5) * 0.6;
+        puff.vx = 1.2 + random(scene) * 1.2;
+        puff.vy = (random(scene) - 0.5) * 0.12;
+        puff.life = 10 + cast(s64)(random(scene) * 12.0);
+        scene.puffs.push(puff);
+    }
+}
+
+emit_dust :: (scene: *Scene) {
+    puff: Puff;
+    puff.x = scene.x + cast(f64) WHEELS_X;
+    puff.y = cast(f64)(ground_row(scene) - 1);
+    puff.vx = 0.5 + random(scene) * 0.8;
+    puff.vy = -random(scene) * 0.15;
+    puff.life = 6 + cast(s64)(random(scene) * 5.0);
+    puff.dust = true;
+    scene.puffs.push(puff);
+}
+
+plane_gone :: (scene: *Scene) -> bool {
+    return scene.x + cast(f64) PLANE_WIDTH <= 0.0 ||
+        plane_top(scene) + cast(f64) PLANE_HEIGHT <= 0.0;
+}
+
+/// Advances the scene by one frame.
+scene_step :: (scene: *Scene) {
+    scene.frame += 1;
+    scene.phase_frame += 1;
+    if scene.phase == {
+        case .Spool;
+            // The engines wind up: the exhaust thickens until the roll.
+            ramp := cast(f64) scene.phase_frame / cast(f64) SPOOL_FRAMES;
+            if random(scene) < ramp emit_exhaust(scene, 1);
+            if scene.phase_frame >= SPOOL_FRAMES {
+                scene.phase = .Roll;
+                scene.phase_frame = 0;
+            }
+        case .Roll;
+            scene.speed += scene.accel;
+            scene.x -= scene.speed;
+            emit_exhaust(scene, 2);
+            if scene.speed > 0.5 && random(scene) < scene.speed / 3.0 emit_dust(scene);
+            if scene.x <= scene.liftoff_x {
+                scene.phase = .Climb;
+                scene.phase_frame = 0;
+                // The wheels leave the runway on this very frame.
+                scene.altitude = 1.0;
+                // Aim for the top left corner: climb just steeply enough to
+                // leave through the top as the tail clears the left edge.
+                rows := plane_top(scene) + cast(f64) PLANE_HEIGHT;
+                columns := scene.x + cast(f64) PLANE_WIDTH;
+                scene.climb_target = rows / columns;
+                if scene.climb_target < CLIMB_MIN scene.climb_target = CLIMB_MIN;
+                if scene.climb_target > CLIMB_MAX scene.climb_target = CLIMB_MAX;
+            }
+        case .Climb;
+            // Climbing, the plane gains speed only slowly.
+            scene.speed += scene.accel * 0.3;
+            scene.climb += scene.climb_target / CLIMB_FRAMES;
+            if scene.climb > scene.climb_target scene.climb = scene.climb_target;
+            scene.x -= scene.speed;
+            scene.altitude += scene.speed * scene.climb;
+            if scene.phase_frame >= GEAR_UP_FRAMES scene.gear = 0;
+            else if scene.phase_frame >= GEAR_HALF_FRAMES scene.gear = 1;
+            emit_exhaust(scene, 2);
+            if plane_gone(scene) {
+                scene.phase = .Gone;
+                scene.phase_frame = 0;
+            }
+        case .Gone;
+            if scene.phase_frame >= GONE_FRAMES && scene.puffs.count == 0 scene.done = true;
+    }
+    if scene.frame >= MAX_FRAMES scene.done = true;
+
+    i: ssize = 0;
+    while i < scene.puffs.count {
+        puff := &scene.puffs[i];
+        puff.age += 1;
+        puff.x += puff.vx;
+        puff.y += puff.vy;
+        puff.vx *= 0.85;
+        // Old smoke drifts up.
+        if !puff.dust && puff.age * 2 > puff.life puff.vy -= 0.02;
+        if puff.age >= puff.life {
+            _ := scene.puffs.swap_remove(i);
+            continue;
+        }
+        i += 1;
+    }
+
+    for i: 0..3 {
+        cloud := &scene.clouds[i];
+        cloud.x -= cloud.speed;
+        if cloud.x + cast(f64) CLOUD_WIDTH < 0.0 cloud.x = cast(f64) scene.width + random(scene) * 10.0;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Drawing.
+
+ink :: (fg: u8, flags: Terminal_Style_Flags = .None) -> Terminal_Style {
+    return Terminal_Style.terminal_style(Terminal_Color.terminal_color_indexed(fg), .{}, flags);
+}
+
+draw_art :: (canvas: *Terminal_Canvas, lines: []str, x: ssize, y: ssize, style: Terminal_Style) {
+    for line, row: lines {
+        for c: 0..line.count {
+            if line[c] != #char " " canvas.set(x + c, y + row, cast(u32) line[c], style);
+        }
+    }
+}
+
+draw_ground :: (scene: *Scene, canvas: *Terminal_Canvas) {
+    g := ground_row(scene);
+    runway := ink(245);
+    marking := ink(255, .Bold);
+    grass := ink(71);
+    blades := ",.'`;";
+    for x: 0..scene.width {
+        canvas.set(x, g, cast(u32) #char "=", runway);
+        if x % 10 < 5 canvas.set(x, g + 1, cast(u32) #char "-", marking);
+        if (x * 7) % 3 != 0 canvas.set(x, g + 2, cast(u32) blades[(x * 13) % blades.count], grass);
+    }
+}
+
+draw_tower :: (scene: *Scene, canvas: *Terminal_Canvas) {
+    x := scene.width - TOWER_WIDTH - TOWER_MARGIN;
+    y := ground_row(scene) - scene.tower.count;
+    body := ink(248);
+    lit := ink(229, .Bold);
+    for line, row: scene.tower {
+        for c: 0..line.count {
+            ch := line[c];
+            if ch == #char " " continue;
+            style := ifx ch == #char "[" || ch == #char "]" lit else body;
+            canvas.set(x + c, y + row, cast(u32) ch, style);
+        }
+    }
+}
+
+plane_style :: (row: ssize, ch: u8) -> Terminal_Style {
+    if ch == #char "f" || ch == #char "l" || ch == #char "s" return ink(203, .Bold);
+    if row == WINDOW_ROW && (ch == #char "o" || ch == #char "[" || ch == #char "]") return ink(117);
+    if row >= GEAR_ROW {
+        if ch == #char "O" return ink(240);
+        return ink(250);
+    }
+    if row == ENGINE_ROW return ink(250);
+    return ink(255);
+}
+
+draw_plane :: (scene: *Scene, canvas: *Terminal_Canvas) {
+    px := to_cell(scene.x);
+    py := to_cell(plane_top(scene));
+    beacon_on := scene.frame % 15 < 4;
+    for row: 0..scene.plane.count {
+        line := scene.plane[row];
+        if row >= GEAR_ROW {
+            if scene.gear == 0 break;
+            // Half retracted: the wheels are tucked up against the belly.
+            if scene.gear == 1 {
+                if row > GEAR_ROW break;
+                line = scene.plane[GEAR_ROW + 1];
+            }
+        }
+        first: ssize = 0;
+        while first < line.count && line[first] == #char " " first += 1;
+        for c: first..line.count {
+            ch := line[c];
+            if ch == #char " " {
+                if row < GEAR_ROW canvas.set(px + c, py + row, 32);
+                continue;
+            }
+            if ch == #char "*" {
+                if beacon_on canvas.set(px + c, py + row, cast(u32) ch, ink(196, .Bold));
+                else canvas.set(px + c, py + row, cast(u32) #char "_", ink(255));
+                continue;
+            }
+            canvas.set(px + c, py + row, cast(u32) ch, plane_style(row, ch));
+        }
+    }
+}
+
+draw_puffs :: (scene: *Scene, canvas: *Terminal_Canvas) {
+    for puff: scene.puffs {
+        x := to_cell(puff.x);
+        y := to_cell(puff.y);
+        if y >= ground_row(scene) continue;
+        // Tenths of the way through its life.
+        stage := puff.age * 10 / puff.life;
+        ch: u8;
+        style: Terminal_Style;
+        if puff.dust {
+            ch = ifx stage < 5 #char "," else #char ".";
+            style = ink(ifx stage < 5 cast(u8) 180 else cast(u8) 137);
+        } else if stage < 2 {
+            ch = #char "=";
+            style = ink(226, .Bold);
+        } else if stage < 4 {
+            ch = #char "~";
+            style = ink(214);
+        } else if stage < 6 {
+            ch = #char "~";
+            style = ink(250);
+        } else if stage < 8 {
+            ch = #char "-";
+            style = ink(244);
+        } else {
+            ch = #char ".";
+            style = ink(240);
+        }
+        canvas.set(x, y, cast(u32) ch, style);
+    }
+}
+
+scene_draw :: (scene: *Scene, canvas: *Terminal_Canvas) {
+    canvas.clear();
+    cloud_style := ink(253);
+    for i: 0..3 {
+        cloud := scene.clouds[i];
+        art := ifx cloud.small scene.cloud_small else scene.cloud;
+        draw_art(canvas, art[..], to_cell(cloud.x), cloud.y, cloud_style);
+    }
+    draw_tower(scene, canvas);
+    draw_ground(scene, canvas);
+    draw_puffs(scene, canvas);
+    if scene.phase != .Gone draw_plane(scene, canvas);
+}
+
+// ---------------------------------------------------------------------------
+// Running it.
+
+/// The SIGINT handler for plain `--lol`: the signal is swallowed.
+ignore_signal :: (signal: s32) #c_call {}
+
+now_ms :: () -> s64 {
+    if Clock.Monotonic.now() == {
+        case .Ok(instant);
+            return instant.nanoseconds / 1_000_000;
+        case .Err;
+            return 0;
+    }
+}
+
+/// Waits until `deadline`, reading and discarding input meanwhile. Returns
+/// true if the user asked to stop, which only `--lol=signal` allows.
+wait_frame :: (session: *Terminal_Session, deadline: s64, mode: Lol_Mode) -> bool {
+    while true {
+        remaining := deadline - now_ms();
+        if remaining <= 0 return false;
+        if session.input_closed {
+            _ := sleep_ns(cast(u64) remaining * 1_000_000);
+            return false;
+        }
+        event := session.read_event(cast(s32) remaining);
+        if mode != .Signal || event.kind != .Key || !event.key.ctrl continue;
+        if event.key.rune == cast(u32) #char "c" || event.key.rune == cast(u32) #char "d" return true;
+    }
+    return false;
+}
+
+lol_play :: (mode: Lol_Mode) -> s32 {
+    session: Terminal_Session;
+    if Terminal_Session.terminal_begin(Terminal_Flags.Default) == {
+        case .Ok(begun);
+            session = begun;
+        case .Err;
+            stderr := File.stderr();
+            defer stderr.free();
+            _ := stderr.writef("fls: --lol needs an interactive terminal\n");
+            return 2;
+    }
+    defer session.free();
+    defer session.end();
+
+    // Raw mode already turns Ctrl-C and Ctrl-D into plain input bytes; with
+    // SIGINT ignored, `kill -INT` cannot land the plane either. The previous
+    // disposition comes back once the plane is gone.
+    if mode == .Trap {
+        if Process_Signal.Interrupt.install_handler(ignore_signal) == {
+            case .Ok(installed);
+                defer _ = Process_Signal.Interrupt.install_handler(installed.previous);
+                return animate(&session, mode);
+            case .Err;
+        }
+    }
+    return animate(&session, mode);
+}
+
+/// Plays the scene until the plane is gone, or until `wait_frame` reports
+/// that the user stopped it.
+animate :: (session: *Terminal_Session, mode: Lol_Mode) -> s32 {
+    canvas := Terminal_Canvas.terminal_canvas_init(80, 24);
+    defer canvas.free();
+    scene: Scene;
+    defer scene_free(&scene);
+    started := false;
+    next := now_ms();
+    while !scene.done {
+        width: ssize = 80;
+        height: ssize = 24;
+        if session.size() == {
+            case .Ok(size);
+                width = cast(ssize) size.columns.max(1);
+                height = cast(ssize) size.rows.max(1);
+            else;
+        }
+        if !started {
+            scene_init(&scene, width, height);
+            started = true;
+        }
+        scene.width = width;
+        scene.height = height;
+        canvas.resize(width, height);
+        scene_draw(&scene, &canvas);
+        if canvas.render_at(session, 0, 0) == {
+            case .Err;
+                break;
+            else;
+        }
+        reset_temporary_storage();
+        scene_step(&scene);
+        next += FRAME_MS;
+        if wait_frame(session, next, mode) break;
+        // After a stall (a suspended terminal, say) carry on, do not race.
+        now := now_ms();
+        if now - next > 250 next = now;
+    }
+    // Keys pressed during the show must not spill into the shell afterwards.
+    while !session.input_closed && session.read_event(0).kind != .None {}
+    return 0;
+}
+
+lol_snapshot :: (width: ssize, height: ssize) -> s32 {
+    canvas := Terminal_Canvas.terminal_canvas_init(width, height);
+    defer canvas.free();
+    scene: Scene;
+    defer scene_free(&scene);
+    scene_init(&scene, width, height);
+    out: String_Builder;
+    defer out.free();
+    while !scene.done {
+        scene_draw(&scene, &canvas);
+        out.write_string(tprint("--- frame {} ---\n", scene.frame));
+        for y: 0..canvas.height {
+            line_start := out.len();
+            for x: 0..canvas.width out.write_rune(
+                cast(rune) canvas.cells[y * canvas.width + x].rune
+            );
+            text := out.to_string();
+            end := text.count;
+            while end > line_start && text[end - 1] == #char " " end -= 1;
+            out.truncate(end);
+            out.write_byte(10);
+        }
+        reset_temporary_storage();
+        scene_step(&scene);
+    }
+    print("{}", out.to_string());
+    return 0;
+}

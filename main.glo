@@ -8,6 +8,7 @@
 #import "src/options.glo";
 #import "src/cli.glo";
 #import "src/tui.glo";
+#import "src/lol.glo";
 
 has_flag :: (args: []const str, prefix: str) -> bool {
     for arg: args if arg.starts_with(prefix) return true;
@@ -34,6 +35,7 @@ main :: () -> s32 {
         print("fls {}\n", FLS_VERSION);
         return 0;
     }
+    if options.lol != .Off return run_lol(options.lol, options.snapshot, options.width);
     if options.tui || options.snapshot {
         // The browser shows icons unless asked not to.
         if options.icons == .Never && !has_flag(rest, "--icons") && !has_flag(rest, "--no-icons") options.icons = .Always;

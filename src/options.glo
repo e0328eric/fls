@@ -24,6 +24,15 @@ When :: enum {
     Never;
 }
 
+/// `--lol`: a plane takes off across the terminal, like `sl`. `Trap` (plain
+/// `--lol`) ignores Ctrl-C and Ctrl-D; `Signal` (`--lol=signal`) lets them
+/// end it early.
+Lol_Mode :: enum {
+    Off;
+    Trap;
+    Signal;
+}
+
 Options :: struct {
     layout: View_Layout = .Grid;
     layout_forced: bool;
@@ -72,6 +81,7 @@ Options :: struct {
     keys: str;
     help: bool;
     version: bool;
+    lol: Lol_Mode;
 }
 
 free_options :: (o: *Options) {
@@ -358,6 +368,10 @@ apply_long :: (o: *Options, name: str, value: str, has_value: bool) -> Parse_Res
             o.snapshot = true;
         case "keys";
             o.keys = value;
+        case "lol";
+            if !has_value o.lol = .Trap;
+            else if value == "signal" o.lol = .Signal;
+            else return fail(tprint("bad value '{}' for --lol", value));
         case "oneline";
             o.layout = .Oneline;
             o.layout_forced = true;

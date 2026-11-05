@@ -102,19 +102,30 @@ Command-line options carry over: `fls --tui -a -l -s size ~/Downloads` opens
 with hidden files, details and size order. Icons are on in the browser unless
 `--no-icons` is given, or you press `I`.
 
+## Taking off (`fls --lol`)
+
+In the spirit of `sl`: an airliner spools up its engines beside the control
+tower, rolls down the runway, lifts off a third of the way across, tucks its
+gear away and climbs out of the terminal. Ctrl-C and Ctrl-D do nothing until it is gone; the terminal is in
+raw mode and SIGINT is ignored for the duration. `fls --lol=signal` installs
+no handler and lets Ctrl-C or Ctrl-D end it early, with the terminal restored
+and exit status 0.
+
 ## Tests
 
 ```sh
 GLOSSO=glosso tests/run.sh   # everything below
 glosso --run -o build/unit_test tests/unit_test.glo
 tests/tui_test.sh            # drives the browser through --snapshot/--keys
+tests/lol_test.py            # --lol in a pseudo-terminal: ^C, ^D and SIGINT
 tests/compare_eza.sh DIR     # diffs fls against eza for ~50 option sets
 tests/compare_kinds.sh       # the same per file kind, under fixed LS_COLORS/EZA_COLORS
 ```
 
 `fls --snapshot -w 100 --keys 'jj<Enter>/src<Enter>' DIR` replays keys and
 prints the browser's frame as text, which is how the TUI is tested without a
-terminal. Build with `GLOSSO_DEBUG_ALLOCATOR=1` to check for leaks; the CLI and
+terminal. `fls --lol --snapshot -w 100` likewise prints every frame of the
+takeoff. Build with `GLOSSO_DEBUG_ALLOCATOR=1` to check for leaks; the CLI and
 the TUI paths above run clean.
 
 ## Layout
@@ -129,6 +140,7 @@ the TUI paths above run clean.
 | `src/git.glo` | per-file git status from `git status --porcelain -z` |
 | `src/cli.glo` | grid (eza's term_grid fitting), long view, tree, recursion |
 | `src/tui.glo` | the browser |
+| `src/lol.glo` | `--lol`: the takeoff animation |
 
 ## Notes
 
