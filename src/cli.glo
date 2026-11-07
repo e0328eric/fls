@@ -122,7 +122,7 @@ report_unreadable :: (r: *Render, path: str, code: s64) {
     stderr := File.stderr();
     defer stderr.free();
     _ := stderr.writef("{}: {} - code: {}\n", os_error_text(code), path, code);
-    if code == 13 r.skipped.push(path.clone());
+    if is_access_denied(code) r.skipped.push(path.clone());
 }
 
 report_skipped :: (r: *Render) {
@@ -758,10 +758,13 @@ column_cell :: (r: *Render, e: *const Entry, c: Column) -> Cell {
         number, unit := human_size(bytes, r.options.size_format);
         return styled_cell(r, tprint("{}{}", number, unit), size_style(bytes));
     case .User;
+        // Windows reports no owner; show a dash rather than a fake uid 0.
+        if !m.has_owner return styled_cell(r, "-", theme.punctuation);
         name := ifx r.options.numeric tprint("{}", m.owner) else user_name(m.owner);
         style := ifx m.owner == current_uid() theme.user_self else theme.user_other;
         return styled_cell(r, name, style);
     case .Group;
+        if !m.has_group return styled_cell(r, "-", theme.punctuation);
         name := ifx r.options.numeric tprint("{}", m.group) else group_name(m.group);
         style := ifx in_group(m.group) theme.group_self else theme.group_other;
         return styled_cell(r, name, style);

@@ -1428,8 +1428,8 @@ draw_status :: (app: *App, canvas: *Terminal_Canvas, y: ssize) -> Terminal_Point
             "{}  {}  {}:{}  {}",
             permission_text(m),
             ifx m.kind == .Directory "-" else short_size(m.size),
-            user_name(m.owner),
-            group_name(m.group),
+            ifx m.has_owner user_name(m.owner) else "-",
+            ifx m.has_group group_name(m.group) else "-",
             ifx m.modified.valid format_time(m.modified.seconds, 0, .Long_Iso) else "-"
         );
         canvas.text(x, y, info, chrome(250, bg));
@@ -1730,15 +1730,9 @@ draw_info :: (app: *App, canvas: *Terminal_Canvas) {
             cast(u32) m.permissions & 7
         )
     );
-    rows.push(
-        tprint(
-            "owner     {} ({})  group {} ({})",
-            user_name(m.owner),
-            m.owner,
-            group_name(m.group),
-            m.group
-        )
-    );
+    owner_text := ifx m.has_owner tprint("{} ({})", user_name(m.owner), m.owner) else "-";
+    group_text := ifx m.has_group tprint("{} ({})", group_name(m.group), m.group) else "-";
+    rows.push(tprint("owner     {}  group {}", owner_text, group_text));
     rows.push(tprint("links     {}   inode {}", m.link_count, m.file_id.low));
     for t, k: .[m.modified, m.accessed, m.changed, m.created] {
         label := ifx k == 0 "modified" else ifx k == 1 "accessed" else ifx k == 2 "changed " else "created ";

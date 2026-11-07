@@ -10,6 +10,7 @@
 #import "Time";
 #import "Math/Core";
 #import "Unicode";
+#import "Process";
 
 #public {
 
@@ -366,17 +367,22 @@ own_groups_loaded := false;
 #public {
 
 /// The user name for `uid`, or its number when the system has none.
-/// The result lives as long as the program.
+/// The result lives as long as the program. Windows has no uid database,
+/// so there it is always the number.
 user_name :: (uid: u64) -> str {
     for entry: user_cache if entry.id == uid return entry.name;
     #push_allocator(heap_allocator());
     name: str;
-    #pattern ?found := c_getpwuid(cast(u32) uid) else {
+    #if EXEC.os == .Windows {
         name = format("{}", uid);
-        user_cache.push(.{ uid, name });
-        return name;
-    };
-    name = c_name(found.name).unwrap_or(format("{}", uid));
+    } else {
+        #pattern ?found := c_getpwuid(cast(u32) uid) else {
+            name = format("{}", uid);
+            user_cache.push(.{ uid, name });
+            return name;
+        };
+        name = c_name(found.name).unwrap_or(format("{}", uid));
+    }
     user_cache.push(.{ uid, name });
     return name;
 }
@@ -386,42 +392,84 @@ group_name :: (gid: u64) -> str {
     for entry: group_cache if entry.id == gid return entry.name;
     #push_allocator(heap_allocator());
     name: str;
-    #pattern ?found := c_getgrgid(cast(u32) gid) else {
+    #if EXEC.os == .Windows {
         name = format("{}", gid);
-        group_cache.push(.{ gid, name });
-        return name;
-    };
-    name = c_name(found.name).unwrap_or(format("{}", gid));
+    } else {
+        #pattern ?found := c_getgrgid(cast(u32) gid) else {
+            name = format("{}", gid);
+            group_cache.push(.{ gid, name });
+            return name;
+        };
+        name = c_name(found.name).unwrap_or(format("{}", gid));
+    }
     group_cache.push(.{ gid, name });
     return name;
 }
 
-/// The C library's message for an errno value, e.g. "Permission denied".
+/// The platform's message for a native error code, e.g. "Permission denied".
+/// On Unix that is `strerror` of an errno; on Windows the code is a
+/// GetLastError value, so the text comes from `FormatMessage` instead, e.g.
+/// "Access is denied". The result may live in the temporary arena.
 os_error_text :: (code: s64) -> str {
-    #pattern ?bytes := c_strerror(cast(s32) code) else {
-        return "Unknown error";
-    };
-    count: ssize = 0;
-    while bytes[count] != 0 count += 1;
-    return raw_string(bytes, count);
-}
-
-current_uid :: () -> u64 {
-    return cast(u64) c_getuid();
-}
-
-/// Whether the current process is a member of group `gid`.
-in_group :: (gid: u64) -> bool {
-    if !own_groups_loaded {
-        #push_allocator(heap_allocator());
-        own_groups_loaded = true;
-        own_groups.push(cast(u64) c_getgid());
-        buffer: [256]u32;
-        n := c_getgroups(256, &buffer[0]);
-        for i: 0..cast(ssize) n own_groups.push(cast(u64) buffer[i]);
+    #if EXEC.os == .Windows {
+        text := process_native_error_text(code);
+        defer text.free();
+        // FormatMessage ends its text with ".\r\n"; drop it to match strerror.
+        count := text.count;
+        while count > 0 {
+            last := text[count - 1];
+            if last != #char " " && last != #char "\r" && last != #char "\n" && last != #char "." break;
+            count -= 1;
+        }
+        if count == 0 return "Unknown error";
+        return tprint("{}", text[0..count]);
+    } else {
+        #pattern ?bytes := c_strerror(cast(s32) code) else {
+            return "Unknown error";
+        };
+        count: ssize = 0;
+        while bytes[count] != 0 count += 1;
+        return raw_string(bytes, count);
     }
-    for g: own_groups if g == gid return true;
-    return false;
+}
+
+/// Whether a native error code means "permission denied": EACCES (13) on
+/// Unix, ERROR_ACCESS_DENIED (5) on Windows.
+is_access_denied :: (code: s64) -> bool {
+    #if EXEC.os == .Windows {
+        return code == 5;
+    } else {
+        return code == 13;
+    }
+}
+
+/// The real user id. Windows has none, so it returns a value no file
+/// owner carries there (owners are reported as 0).
+current_uid :: () -> u64 {
+    #if EXEC.os == .Windows {
+        return cast(u64) ssize_max();
+    } else {
+        return cast(u64) c_getuid();
+    }
+}
+
+/// Whether the current process is a member of group `gid`. Always false
+/// on Windows, which has no POSIX groups.
+in_group :: (gid: u64) -> bool {
+    #if EXEC.os == .Windows {
+        return false;
+    } else {
+        if !own_groups_loaded {
+            #push_allocator(heap_allocator());
+            own_groups_loaded = true;
+            own_groups.push(cast(u64) c_getgid());
+            buffer: [256]u32;
+            n := c_getgroups(256, &buffer[0]);
+            for i: 0..cast(ssize) n own_groups.push(cast(u64) buffer[i]);
+        }
+        for g: own_groups if g == gid return true;
+        return false;
+    }
 }
 
 host_name :: () -> str {
